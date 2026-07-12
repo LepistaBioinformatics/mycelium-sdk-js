@@ -3,6 +3,7 @@ name: Release
 on:
   push:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -11,6 +12,7 @@ permissions:
 
 jobs:
   release:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -41,6 +43,38 @@ jobs:
           if [ -z "$NPM_TOKEN" ]; then
             echo "NPM_TOKEN not configured — version ${{ steps.semantic.outputs.new_release_version }} was tagged and released on GitHub, but npm publish was skipped."
             exit 0
+          fi
+          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > .npmrc
+          npm publish --access public
+
+  # One-off manual publish for the CURRENT package.json version, bypassing
+  # semantic-release's commit-analysis. Use this to bootstrap the first npm
+  # publish of a version that was already tagged by a prior automatic run
+  # (e.g. before NPM_TOKEN existed) — normal version bumps still go through
+  # the `release` job above via feat/fix/BREAKING CHANGE commits.
+  manual-publish:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "24"
+          cache: "yarn"
+
+      - run: yarn install --frozen-lockfile
+      - run: yarn build
+      - run: yarn test --run
+      - run: yarn lint
+
+      - name: Publish current package.json version to npm
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "$NPM_TOKEN" ]; then
+            echo "NPM_TOKEN not configured — cannot publish." >&2
+            exit 1
           fi
           echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > .npmrc
           npm publish --access public
