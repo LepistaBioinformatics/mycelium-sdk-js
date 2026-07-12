@@ -1,3 +1,16 @@
+## [2.0.0](https://github.com/LepistaBioinformatics/mycelium-sdk-js/compare/v1.0.0...v2.0.0) (2026-07-12)
+
+### ⚠ BREAKING CHANGES
+
+* package name changed from @mycelium/mycelium-sdk to
+@lepistabioinformatics/mycelium-sdk.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+
+### Miscellaneous Chores
+
+* rename package scope to [@lepistabioinformatics](https://github.com/lepistabioinformatics) ([8d15d2d](https://github.com/LepistaBioinformatics/mycelium-sdk-js/commit/8d15d2d71b928dbad443ae6dbe8b179483e9e1d9))
+
 ## 1.0.0 (2026-07-12)
 
 ### Features
