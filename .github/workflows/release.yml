@@ -9,6 +9,7 @@ permissions:
   contents: write
   issues: write
   pull-requests: write
+  id-token: write # required for npm trusted publishing (OIDC)
 
 jobs:
   release:
@@ -24,6 +25,7 @@ jobs:
           node-version: "24"
           cache: "yarn"
 
+      - run: npm install -g npm@latest # ensure npm >=11.5.1 for OIDC trusted publishing
       - run: yarn install --frozen-lockfile
       - run: yarn build
       - run: yarn test --run
@@ -35,23 +37,13 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Publish to npm (only if NPM_TOKEN is configured)
+      - name: Publish to npm via trusted publishing (OIDC, no token needed)
         if: steps.semantic.outputs.new_release_published == 'true'
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          if [ -z "$NPM_TOKEN" ]; then
-            echo "NPM_TOKEN not configured — version ${{ steps.semantic.outputs.new_release_version }} was tagged and released on GitHub, but npm publish was skipped."
-            exit 0
-          fi
-          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > .npmrc
-          npm publish --access public
+        run: npm publish --access public
 
   # One-off manual publish for the CURRENT package.json version, bypassing
-  # semantic-release's commit-analysis. Use this to bootstrap the first npm
-  # publish of a version that was already tagged by a prior automatic run
-  # (e.g. before NPM_TOKEN existed) — normal version bumps still go through
-  # the `release` job above via feat/fix/BREAKING CHANGE commits.
+  # semantic-release's commit-analysis. Useful to republish/retry without
+  # waiting for a new feat/fix/BREAKING CHANGE commit to land.
   manual-publish:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
@@ -63,18 +55,11 @@ jobs:
           node-version: "24"
           cache: "yarn"
 
+      - run: npm install -g npm@latest # ensure npm >=11.5.1 for OIDC trusted publishing
       - run: yarn install --frozen-lockfile
       - run: yarn build
       - run: yarn test --run
       - run: yarn lint
 
-      - name: Publish current package.json version to npm
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          if [ -z "$NPM_TOKEN" ]; then
-            echo "NPM_TOKEN not configured — cannot publish." >&2
-            exit 1
-          fi
-          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > .npmrc
-          npm publish --access public
+      - name: Publish current package.json version to npm via trusted publishing
+        run: npm publish --access public
