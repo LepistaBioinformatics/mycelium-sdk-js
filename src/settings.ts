@@ -1,0 +1,7 @@
+export const DEFAULT_PROFILE_KEY = "x-mycelium-profile"
+export const DEFAULT_EMAIL_KEY = "x-mycelium-email"
+export const DEFAULT_SCOPE_KEY = "x-mycelium-scope"
+export const DEFAULT_MYCELIUM_ROLE_KEY = "x-mycelium-role"
+export const DEFAULT_REQUEST_ID_KEY = "x-mycelium-request-id"
+export const DEFAULT_CONNECTION_STRING_KEY = "x-mycelium-connection-string"
+export const DEFAULT_TENANT_ID_KEY = "x-mycelium-tenant-id"
