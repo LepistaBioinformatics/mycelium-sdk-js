@@ -1,5 +1,5 @@
 {
-  "name": "@mycelium/mycelium-sdk",
+  "name": "@lepistabioinformatics/mycelium-sdk",
   "version": "1.0.0",
   "description": "Mycelium SDK for Node.js/TypeScript backends — decode the x-mycelium-profile header and enforce tenant/account/role authorization with a fluent, typed API",
   "license": "Apache-2.0",

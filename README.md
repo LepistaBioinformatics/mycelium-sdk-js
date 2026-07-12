@@ -18,23 +18,23 @@ Python SDK doesn't expose).
 
 ```bash
 # Core only (framework-agnostic)
-yarn add @mycelium/mycelium-sdk
+yarn add @lepistabioinformatics/mycelium-sdk
 
 # With an Express adapter
-yarn add @mycelium/mycelium-sdk express
+yarn add @lepistabioinformatics/mycelium-sdk express
 
 # With a Fastify adapter
-yarn add @mycelium/mycelium-sdk fastify
+yarn add @lepistabioinformatics/mycelium-sdk fastify
 ```
 
 `express`/`fastify` are optional peer dependencies — the core package has no required
 framework dependency. Import the adapter you need from its subpath:
-`@mycelium/mycelium-sdk/express` or `@mycelium/mycelium-sdk/fastify`.
+`@lepistabioinformatics/mycelium-sdk/express` or `@lepistabioinformatics/mycelium-sdk/fastify`.
 
 ## Core usage
 
 ```ts
-import { decodeAndDecompressProfileFromBase64 } from "@mycelium/mycelium-sdk"
+import { decodeAndDecompressProfileFromBase64 } from "@lepistabioinformatics/mycelium-sdk"
 
 const profile = decodeAndDecompressProfileFromBase64(headerValue)
 
@@ -51,7 +51,7 @@ const relatedAccounts = profile
 non-throwing variant if you'd rather branch on a result:
 
 ```ts
-import { safeDecodeAndDecompressProfileFromBase64 } from "@mycelium/mycelium-sdk"
+import { safeDecodeAndDecompressProfileFromBase64 } from "@lepistabioinformatics/mycelium-sdk"
 
 const result = safeDecodeAndDecompressProfileFromBase64(headerValue)
 if (!result.success) {
@@ -65,7 +65,7 @@ if (!result.success) {
 
 ```ts
 import express from "express"
-import { profileMiddleware } from "@mycelium/mycelium-sdk/express"
+import { profileMiddleware } from "@lepistabioinformatics/mycelium-sdk/express"
 
 const app = express()
 app.use(profileMiddleware())
@@ -82,7 +82,7 @@ route-level middleware when a route must always have a valid profile, regardless
 environment:
 
 ```ts
-import { getProfileFromHeaderRequired } from "@mycelium/mycelium-sdk/express"
+import { getProfileFromHeaderRequired } from "@lepistabioinformatics/mycelium-sdk/express"
 
 app.get("/admin", getProfileFromHeaderRequired(), (req, res) => {
   res.json({ accId: req.profile!.accId })
@@ -93,7 +93,7 @@ app.get("/admin", getProfileFromHeaderRequired(), (req, res) => {
 
 ```ts
 import Fastify from "fastify"
-import { fastifyProfilePlugin } from "@mycelium/mycelium-sdk/fastify"
+import { fastifyProfilePlugin } from "@lepistabioinformatics/mycelium-sdk/fastify"
 
 const app = Fastify()
 await app.register(fastifyProfilePlugin)
