@@ -27,10 +27,14 @@ describe("Permission", () => {
     expect(() => permissionFromInt(-1)).toThrow()
   })
 
-  it("PermissionSchema validates 0 and 1, rejects anything else", () => {
+  it("PermissionSchema keeps numeric API codes and accepts Rust wire names", () => {
     expect(PermissionSchema.parse(0)).toBe(0)
     expect(PermissionSchema.parse(1)).toBe(1)
     expect(() => PermissionSchema.parse(2)).toThrow()
-    expect(() => PermissionSchema.parse("read")).toThrow()
+    expect(PermissionSchema.parse("read")).toBe(Permission.READ)
+    expect(PermissionSchema.parse("write")).toBe(Permission.WRITE)
+    for (const invalid of ["Read", "admin", "0", "1", null, true, -1]) {
+      expect(() => PermissionSchema.parse(invalid)).toThrow()
+    }
   })
 })

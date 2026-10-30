@@ -30,7 +30,7 @@ export const ProfileSchema = z.object({
   accountWasApproved: z.boolean(),
   accountWasArchived: z.boolean(),
   accountWasDeleted: z.boolean(),
-  verboseStatus: VerboseStatusSchema.optional(),
+  verboseStatus: VerboseStatusSchema.nullish(),
   licensedResources: LicensedResourcesSchema.optional(),
   tenantsOwnership: TenantsOwnershipSchema.optional(),
   meta: ProfileMetaSchema.optional(),
