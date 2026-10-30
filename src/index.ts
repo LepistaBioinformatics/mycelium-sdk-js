@@ -13,3 +13,12 @@ export * from "./models/relatedAccounts.js"
 export * from "./models/profile.js"
 
 export * from "./functions/decodeAndDecompressProfileFromBase64.js"
+export * from "./functions/verifyProfileSignature.js"
+export * from "./profileSignatureConfig.js"
+export {
+  SIGNATURE_INTERNAL_DETAIL,
+  SIGNATURE_REJECTION_DETAIL,
+  verifyRequestProfile,
+  type SignatureRejectionListener,
+  type SignatureVerificationOutcome,
+} from "./profileSignatureEnforcement.js"

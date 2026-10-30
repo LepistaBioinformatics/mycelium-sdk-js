@@ -4,6 +4,14 @@ import {
   decodeAndDecompressProfileFromBase64,
 } from "../functions/decodeAndDecompressProfileFromBase64.js"
 import type { Profile } from "../models/profile.js"
+import {
+  loadProfileSignatureVerifierFromEnv,
+  type ProfileSignatureVerifier,
+} from "../profileSignatureConfig.js"
+import {
+  verifyRequestProfile,
+  type SignatureRejectionListener,
+} from "../profileSignatureEnforcement.js"
 import { DEFAULT_PROFILE_KEY } from "../settings.js"
 
 declare module "fastify" {
@@ -14,6 +22,14 @@ declare module "fastify" {
 
 export interface FastifyProfilePluginOptions {
   environment?: string
+  /**
+   * Pre-built verifier. Defaults to `MYC_PROFILE_PUBLIC_KEY_*` from
+   * `process.env`, read once at registration. Invalid configuration fails
+   * the registration, so the server does not start.
+   */
+  signatureVerifier?: ProfileSignatureVerifier
+  /** Receives the log-safe reason of each rejected signature. */
+  onSignatureRejected?: SignatureRejectionListener
 }
 
 function resolveEnvironment(opts?: FastifyProfilePluginOptions): string {
@@ -30,6 +46,26 @@ const fastifyProfilePluginImpl: FastifyPluginAsync<
   FastifyProfilePluginOptions
 > = async (fastify, opts) => {
   fastify.decorateRequest("profile", undefined)
+
+  const verifier =
+    opts.signatureVerifier ?? loadProfileSignatureVerifierFromEnv()
+
+  if (verifier !== undefined) {
+    // Verification enabled: reply 403/500 in every environment and never
+    // reach the route handler without an accepted signature.
+    fastify.addHook("onRequest", async (request, reply) => {
+      const outcome = await verifyRequestProfile(
+        request.raw,
+        verifier,
+        opts.onSignatureRejected
+      )
+      if (!outcome.ok) {
+        return reply.status(outcome.status).send({ detail: outcome.detail })
+      }
+      request.profile = outcome.profile
+    })
+    return
+  }
 
   fastify.addHook("onRequest", async (request, reply) => {
     try {

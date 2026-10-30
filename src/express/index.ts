@@ -4,6 +4,15 @@ import {
   decodeAndDecompressProfileFromBase64,
 } from "../functions/decodeAndDecompressProfileFromBase64.js"
 import type { Profile } from "../models/profile.js"
+import {
+  loadProfileSignatureVerifierFromEnv,
+  type ProfileSignatureVerifier,
+} from "../profileSignatureConfig.js"
+import {
+  SIGNATURE_INTERNAL_DETAIL,
+  verifyRequestProfile,
+  type SignatureRejectionListener,
+} from "../profileSignatureEnforcement.js"
 import { DEFAULT_PROFILE_KEY } from "../settings.js"
 
 declare global {
@@ -15,8 +24,52 @@ declare global {
   }
 }
 
-export interface ProfileMiddlewareOptions {
+export interface ProfileSignatureOptions {
+  /**
+   * Pre-built verifier. Defaults to `MYC_PROFILE_PUBLIC_KEY_*` from
+   * `process.env`, read once when the middleware is created. Invalid
+   * configuration throws here, so the application fails to start.
+   */
+  signatureVerifier?: ProfileSignatureVerifier
+  /** Receives the log-safe reason of each rejected signature. */
+  onSignatureRejected?: SignatureRejectionListener
+}
+
+export interface ProfileMiddlewareOptions extends ProfileSignatureOptions {
   environment?: string
+}
+
+function resolveVerifier(
+  opts: ProfileSignatureOptions
+): ProfileSignatureVerifier | undefined {
+  return opts.signatureVerifier ?? loadProfileSignatureVerifierFromEnv()
+}
+
+/**
+ * Verification enabled: the profile is only exposed, and `next` only called,
+ * after the signature is accepted. Failures answer 403/500 in every
+ * environment; the development leniency never applies.
+ */
+function signatureEnforcingHandler(
+  verifier: ProfileSignatureVerifier,
+  onRejected?: SignatureRejectionListener
+): RequestHandler {
+  return (req: Request, res: Response, next: NextFunction): void => {
+    verifyRequestProfile(req, verifier, onRejected)
+      .then((outcome) => {
+        if (!outcome.ok) {
+          res.status(outcome.status).json({ detail: outcome.detail })
+          return
+        }
+        req.profile = outcome.profile
+        next()
+      })
+      .catch(() => {
+        if (!res.headersSent) {
+          res.status(500).json({ detail: SIGNATURE_INTERNAL_DETAIL })
+        }
+      })
+  }
 }
 
 function resolveEnvironment(opts?: ProfileMiddlewareOptions): string {
@@ -32,6 +85,11 @@ function extractHeaderValue(req: Request): string | undefined {
 export function profileMiddleware(
   opts: ProfileMiddlewareOptions = {}
 ): RequestHandler {
+  const verifier = resolveVerifier(opts)
+  if (verifier !== undefined) {
+    return signatureEnforcingHandler(verifier, opts.onSignatureRejected)
+  }
+
   return (req: Request, res: Response, next: NextFunction): void => {
     try {
       const isDev = resolveEnvironment(opts) === "development"
@@ -70,7 +128,14 @@ export function profileMiddleware(
   }
 }
 
-export function getProfileFromHeaderRequired(): RequestHandler {
+export function getProfileFromHeaderRequired(
+  opts: ProfileSignatureOptions = {}
+): RequestHandler {
+  const verifier = resolveVerifier(opts)
+  if (verifier !== undefined) {
+    return signatureEnforcingHandler(verifier, opts.onSignatureRejected)
+  }
+
   return (req: Request, res: Response, next: NextFunction): void => {
     try {
       const headerValue = extractHeaderValue(req)
