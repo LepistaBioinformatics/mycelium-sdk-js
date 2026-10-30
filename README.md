@@ -106,12 +106,88 @@ app.get("/whoami", async (request) => ({
 Same environment-gated behavior as the Express adapter (`request.profile` is
 `Profile | undefined`, with the same 403/401/500 status codes in production).
 
+## Profile signature verification (opt-in)
+
+When the gateway is configured with `[core.profileSigning]`, it adds
+`x-mycelium-profile-signature` to every request that carries
+`x-mycelium-profile`: a compact JWS (`alg: EdDSA`, `kid: <key version>`) over
+`{iat, ph, aud}`, where `ph` is the SHA-256 of the exact profile header and
+`aud` the downstream service name. Verification is local (`jose`), with no
+call to the gateway and no key fetching.
+
+> **Rollout order is mandatory.** Confirm the gateway in front of this service
+> is already signing **before** setting any public key here. A service that
+> verifies behind a gateway that does not sign rejects every request (403).
+> To roll back, remove the public keys here first, then disable signing in the
+> gateway.
+
+Set the gateway's **public** key(s) (PEM SubjectPublicKeyInfo, real line
+breaks) before creating the middleware or registering the plugin:
+
+```bash
+export MYC_PROFILE_PUBLIC_KEY_1="$(cat profile-signing-v1.pub.pem)"
+export MYC_PROFILE_PUBLIC_KEY_2="$(cat profile-signing-v2.pub.pem)"  # rotation
+export MYC_PROFILE_SIGNATURE_TOLERANCE_SECONDS=60   # optional, default 60
+export MYC_PROFILE_SIGNATURE_AUDIENCE=billing-api   # optional
+```
+
+The environment is read once, when `profileMiddleware()` /
+`getProfileFromHeaderRequired()` are called or `fastifyProfilePlugin` is
+registered. Invalid configuration throws `ProfileSignatureConfigurationError`
+there, so the application does not start. Load `.env` files before that point.
+
+With verification enabled, the Express middlewares and the Fastify plugin
+verify before decoding and answer **403** `Unable to verify Mycelium profile`
+on signature rejection, in every environment (the development leniency never
+applies). Duplicate headers are rejected. `next()` / the route handler only
+run after the signature is accepted. Unexpected internal failures return generic
+500 without invoking the handler. Without the variables nothing changes.
+Tolerance must be a positive safe integer (<= 9007199254740991).
+
+```ts
+app.use(
+  profileMiddleware({
+    // optional: observe rejections (log-safe reason, never the token)
+    onSignatureRejected: (reason) => logger.warn({ reason }, "profile rejected"),
+  })
+)
+```
+
+Custom integrations can use the strict API. It is asynchronous: always
+`await` it. `decodeAndDecompressProfileFromBase64` does **not** verify:
+
+```ts
+import {
+  loadProfileSignatureVerifierFromEnv,
+  verifyAndDecodeProfile,
+} from "@lepistabioinformatics/mycelium-sdk"
+
+const verifier = loadProfileSignatureVerifierFromEnv() // once, at startup
+if (!verifier) throw new Error("Profile verification must be configured for this service")
+const profile = await verifyAndDecodeProfile(profileHeader, signatureHeader, verifier)
+```
+
+Diagnostic callbacks may return a promise. The SDK awaits it and contains both
+synchronous exceptions and promise rejections, returning generic 500 without
+executing the handler. Keep application callbacks bounded.
+
+Limits (by design): a captured valid pair can be replayed during the
+tolerance window (and to other services unless
+`MYC_PROFILE_SIGNATURE_AUDIENCE` is set); only `x-mycelium-profile` is signed.
+Mount the middleware only on routes that require a profile.
+
+Rust wire permissions `"read"` / `"write"` are accepted and normalized to the
+SDK's existing numeric `Permission.READ = 0` / `Permission.WRITE = 1` API.
+The optional Rust `verboseStatus: null` is accepted without weakening enum checks.
+
 ## Error handling
 
 All SDK errors extend `MyceliumError` (`message`, `code`, `expTrue`):
 
 | Error | Code | Thrown by |
 |---|---|---|
+| `ProfileSignatureError` | `MYC_PROFILE_SIGNATURE_INVALID` | `verifyProfileSignature` / `verifyAndDecodeProfile` (carries a log-safe `reason`) |
+| `ProfileSignatureConfigurationError` | `MYC_PROFILE_SIGNATURE_CONFIG_INVALID` | Invalid `MYC_PROFILE_*` configuration |
 | `ProfileDecodingError` | `MYC00020` | `decodeAndDecompressProfileFromBase64` on any decode/validation failure |
 | `InsufficientLicensesError` | `MYC00019` | `getRelatedAccountOrError()` when licensed resources are present but empty |
 | `InsufficientPrivilegesError` | `MYC00019` | Any fluent method that requires a privilege the profile lacks (carries `filteringState` for debugging) |
