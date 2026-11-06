@@ -2,14 +2,14 @@ import express, { type RequestHandler } from "express"
 import supertest from "supertest"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { ProfileSignatureConfigurationError } from "../errors.js"
-import { loadProfileSignatureVerifierFromEnv } from "../profileSignatureConfig.js"
 import {
   DEFAULT_PROFILE_KEY,
   DEFAULT_PROFILE_SIGNATURE_KEY,
 } from "../settings.js"
 import {
   CONTRACT,
-  environmentFor,
+  TEST_AUDIENCE,
+  jwksVerifierFor,
   vectorNamed,
 } from "../testdata/profileSignatureContract.js"
 import { getProfileFromHeaderRequired, profileMiddleware } from "./index.js"
@@ -20,7 +20,7 @@ const ACCOUNT = CONTRACT.expectedValidProfile.accId
 type Headers = Record<string, string | string[]>
 
 function verifier() {
-  return loadProfileSignatureVerifierFromEnv(environmentFor(["1"]))
+  return jwksVerifierFor(["1"])
 }
 
 function signed(vector = VALID): Headers {
@@ -159,14 +159,23 @@ describe.each(ENTRY_POINTS)("Express %s with verification enabled", (_name, fact
 })
 
 describe("Express factories read the environment at creation", () => {
-  const variable = "MYC_PROFILE_PUBLIC_KEY_1"
+  const variables = [
+    "MYCELIUM_JWKS_URL",
+    "MYCELIUM_JWKS_ALLOW_INSECURE_HTTP",
+    "MYC_PROFILE_SIGNATURE_AUDIENCE",
+  ]
 
   afterEach(() => {
-    delete process.env[variable]
+    for (const variable of variables) delete process.env[variable]
+    vi.restoreAllMocks()
   })
 
-  it("invalid configuration throws when the middleware is created", () => {
-    process.env[variable] = "broken"
+  it.each([
+    [{ MYCELIUM_JWKS_URL: "https://gateway.test/jwks.json" }],
+    [{ MYCELIUM_JWKS_URL: "http://gateway.test/jwks.json", MYC_PROFILE_SIGNATURE_AUDIENCE: TEST_AUDIENCE }],
+    [{ MYCELIUM_JWKS_URL: "not a url", MYC_PROFILE_SIGNATURE_AUDIENCE: TEST_AUDIENCE }],
+  ])("invalid configuration throws when the middleware is created (%o)", (env) => {
+    Object.assign(process.env, env)
 
     expect(() => profileMiddleware()).toThrow(ProfileSignatureConfigurationError)
     expect(() => getProfileFromHeaderRequired()).toThrow(
@@ -175,7 +184,8 @@ describe("Express factories read the environment at creation", () => {
   })
 
   it("configured environment enables verification", async () => {
-    process.env[variable] = CONTRACT.publicKeys["1"]
+    process.env.MYCELIUM_JWKS_URL = "https://gateway.test/jwks.json"
+    process.env.MYC_PROFILE_SIGNATURE_AUDIENCE = TEST_AUDIENCE
     const calls = { count: 0 }
 
     const response = await send(
@@ -188,6 +198,7 @@ describe("Express factories read the environment at creation", () => {
   })
 
   it("without configuration the signature header is ignored", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined)
     const calls = { count: 0 }
 
     const response = await send(

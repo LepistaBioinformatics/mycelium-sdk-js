@@ -14,7 +14,15 @@ export * from "./models/profile.js"
 
 export * from "./functions/decodeAndDecompressProfileFromBase64.js"
 export * from "./functions/verifyProfileSignature.js"
+export * from "./profileSignatureVerifier.js"
 export * from "./profileSignatureConfig.js"
+export * from "./jwks/fetchProfileJwks.js"
+export * from "./jwks/jwksProfileSignatureVerifier.js"
+export * from "./jwks/parseProfileJwks.js"
+export * from "./jwks/parseProfileJwksUrl.js"
+export * from "./jwks/profileKeyStore.js"
+export * from "./jwks/readJwksCacheMaxAge.js"
+export * from "./jwks/readSignatureKeyVersion.js"
 export {
   SIGNATURE_INTERNAL_DETAIL,
   SIGNATURE_REJECTION_DETAIL,

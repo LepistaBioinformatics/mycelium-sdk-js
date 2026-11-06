@@ -2,12 +2,11 @@ import { createHash } from "node:crypto"
 import { existsSync, readFileSync } from "node:fs"
 import { describe, expect, it } from "vitest"
 import { ProfileSignatureError } from "../errors.js"
-import { loadProfileSignatureVerifierFromEnv } from "../profileSignatureConfig.js"
 import {
   CONTRACT,
   CONTRACT_FILE,
   GATEWAY_CONTRACT_FILE,
-  environmentFor,
+  staticVerifierFor,
   type ContractVector,
 } from "../testdata/profileSignatureContract.js"
 import {
@@ -17,18 +16,11 @@ import {
 } from "./verifyProfileSignature.js"
 
 function verifierFor(vector: ContractVector) {
-  const extra: Record<string, string> = {
-    MYC_PROFILE_SIGNATURE_TOLERANCE_SECONDS: String(vector.toleranceSeconds),
-  }
-  if (vector.expectedAudience !== null) {
-    extra.MYC_PROFILE_SIGNATURE_AUDIENCE = vector.expectedAudience
-  }
-
-  const verifier = loadProfileSignatureVerifierFromEnv(
-    environmentFor(vector.trustedKeyVersions, extra)
+  return staticVerifierFor(
+    vector.trustedKeyVersions,
+    vector.toleranceSeconds,
+    vector.expectedAudience ?? undefined
   )
-  if (verifier === undefined) throw new Error("verifier expected")
-  return verifier
 }
 
 async function outcomeOf(vector: ContractVector): Promise<string> {

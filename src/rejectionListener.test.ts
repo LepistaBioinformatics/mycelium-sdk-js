@@ -3,11 +3,10 @@ import Fastify from "fastify"
 import express from "express"
 import supertest from "supertest"
 import { afterEach, expect, it, vi } from "vitest"
-import { loadProfileSignatureVerifierFromEnv } from "./profileSignatureConfig.js"
 import { SIGNATURE_INTERNAL_DETAIL, verifyRequestProfile } from "./profileSignatureEnforcement.js"
 import { fastifyProfilePlugin } from "./fastify/index.js"
 import { getProfileFromHeaderRequired, profileMiddleware } from "./express/index.js"
-import { environmentFor } from "./testdata/profileSignatureContract.js"
+import { jwksVerifierFor } from "./testdata/profileSignatureContract.js"
 
 afterEach(() => vi.restoreAllMocks())
 
@@ -17,7 +16,7 @@ const listeners = [
 ] as const
 
 it.each(listeners)("contains %s diagnostic callback failures in strict API", async (_name, listener) => {
-  const verifier = loadProfileSignatureVerifierFromEnv(environmentFor(["1"]))!
+  const verifier = jwksVerifierFor(["1"])
   const request = { headers: {}, rawHeaders: [] } as unknown as IncomingMessage
   const result = await verifyRequestProfile(request, verifier, listener)
   expect(result).toEqual({ ok: false, status: 500, detail: SIGNATURE_INTERNAL_DETAIL })
@@ -29,7 +28,7 @@ it.each(["development", "production"].flatMap((environment) =>
 ))("Express %s %s contains %s callback errors before handler", async (environment, entry, _name, listener) => {
   const app = express()
   const handler = vi.fn((_req: express.Request, res: express.Response) => res.json({ unexpected: true }))
-  const options = { signatureVerifier: loadProfileSignatureVerifierFromEnv(environmentFor(["1"])), onSignatureRejected: listener }
+  const options = { signatureVerifier: jwksVerifierFor(["1"]), onSignatureRejected: listener }
   const middleware = entry === "required" ? getProfileFromHeaderRequired(options) : profileMiddleware({ ...options, environment })
   app.get("/whoami", middleware, handler)
   const response = await supertest(app).get("/whoami")
@@ -45,7 +44,7 @@ it.each(["development", "production"].flatMap((environment) =>
   const app = Fastify()
   const handler = vi.fn(() => ({ unexpected: true }))
   await app.register(fastifyProfilePlugin, {
-    environment, signatureVerifier: loadProfileSignatureVerifierFromEnv(environmentFor(["1"])),
+    environment, signatureVerifier: jwksVerifierFor(["1"]),
     onSignatureRejected: listener,
   })
   app.get("/whoami", handler)

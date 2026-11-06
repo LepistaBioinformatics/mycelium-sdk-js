@@ -4,12 +4,11 @@ import {
   decodeAndDecompressProfileFromBase64,
 } from "../functions/decodeAndDecompressProfileFromBase64.js"
 import type { Profile } from "../models/profile.js"
-import {
-  loadProfileSignatureVerifierFromEnv,
-  type ProfileSignatureVerifier,
-} from "../profileSignatureConfig.js"
+import type { JwksProfileSignatureVerifier } from "../jwks/jwksProfileSignatureVerifier.js"
+import { loadProfileSignatureVerifierFromEnv } from "../profileSignatureConfig.js"
 import {
   verifyRequestProfile,
+  warnWhenSignatureIsIgnored,
   type SignatureRejectionListener,
 } from "../profileSignatureEnforcement.js"
 import { DEFAULT_PROFILE_KEY } from "../settings.js"
@@ -23,11 +22,14 @@ declare module "fastify" {
 export interface FastifyProfilePluginOptions {
   environment?: string
   /**
-   * Pre-built verifier. Defaults to `MYC_PROFILE_PUBLIC_KEY_*` from
-   * `process.env`, read once at registration. Invalid configuration fails
-   * the registration, so the server does not start.
+   * Pre-built verifier. Defaults to `MYCELIUM_JWKS_URL` (and the related
+   * variables) from `process.env`, read once at registration: invalid
+   * configuration fails the registration. The gateway keys are downloaded on
+   * the first signed request (requests fail closed until they are available),
+   * so the service never waits for the gateway to start. To download them
+   * at startup instead, pass `await prepareProfileSignatureVerifier()`.
    */
-  signatureVerifier?: ProfileSignatureVerifier
+  signatureVerifier?: JwksProfileSignatureVerifier
   /** Receives the log-safe reason of each rejected signature. */
   onSignatureRejected?: SignatureRejectionListener
 }
@@ -68,6 +70,7 @@ const fastifyProfilePluginImpl: FastifyPluginAsync<
   }
 
   fastify.addHook("onRequest", async (request, reply) => {
+    warnWhenSignatureIsIgnored(request.raw)
     try {
       const isDev = resolveEnvironment(opts) === "development"
       const headerValue = extractHeaderValue(request)

@@ -55,9 +55,10 @@ export type ProfileSignatureRejectionReason =
   | "invalid_profile"
 
 /**
- * Invalid verification configuration. Any `MYC_PROFILE_PUBLIC_KEY_*` means
- * "verification requested": a malformed entry must stop the service instead
- * of silently disabling verification. Messages name variables, never values.
+ * Invalid verification configuration (`MYCELIUM_JWKS_URL` and related
+ * variables) or an unsafe/malformed gateway JWKS. A malformed setting must
+ * stop the service instead of silently disabling verification. Messages
+ * name variables, never values.
  */
 export class ProfileSignatureConfigurationError extends MyceliumError {
   constructor(message: string) {

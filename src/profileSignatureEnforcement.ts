@@ -1,8 +1,7 @@
 import type { IncomingMessage } from "node:http"
 import { ProfileSignatureError } from "./errors.js"
-import { verifyAndDecodeProfile } from "./functions/verifyProfileSignature.js"
+import type { JwksProfileSignatureVerifier } from "./jwks/jwksProfileSignatureVerifier.js"
 import type { Profile } from "./models/profile.js"
-import type { ProfileSignatureVerifier } from "./profileSignatureConfig.js"
 import {
   DEFAULT_PROFILE_KEY,
   DEFAULT_PROFILE_SIGNATURE_KEY,
@@ -97,7 +96,7 @@ function distinctValues(
  */
 export async function verifyRequestProfile(
   message: IncomingMessage,
-  verifier: ProfileSignatureVerifier,
+  verifier: JwksProfileSignatureVerifier,
   onRejected?: SignatureRejectionListener
 ): Promise<SignatureVerificationOutcome> {
   try {
@@ -109,10 +108,9 @@ export async function verifyRequestProfile(
       distinctValues(message, DEFAULT_PROFILE_SIGNATURE_KEY),
       "missing_signature"
     )
-    const profile = await verifyAndDecodeProfile(
+    const profile = await verifier.verifyAndDecode(
       profileHeader,
-      signatureHeader,
-      verifier
+      signatureHeader
     )
     return { ok: true, profile }
   } catch (error) {
@@ -125,4 +123,26 @@ export async function verifyRequestProfile(
     await reportRejection(onRejected, "internal_error")
     return { ok: false, status: 500, detail: SIGNATURE_INTERNAL_DETAIL }
   }
+}
+
+let unverifiedSignatureWarned = false
+
+/**
+ * Log once per process that a signed profile arrived while verification is
+ * off. The usual cause is a service that forgot `MYCELIUM_JWKS_URL`: the
+ * profile is still trusted as received, exactly as before.
+ */
+export function warnWhenSignatureIsIgnored(message: IncomingMessage): void {
+  if (unverifiedSignatureWarned) return
+  if (message.headers[DEFAULT_PROFILE_SIGNATURE_KEY] === undefined) return
+
+  unverifiedSignatureWarned = true
+  console.warn(
+    "[mycelium-sdk] profile_signature.verify outcome=skipped: received a signed profile but MYCELIUM_JWKS_URL is not set; the signature is not verified"
+  )
+}
+
+/** Test-only: allow the one-time warning to be observed again. */
+export function resetSignatureIgnoredWarning(): void {
+  unverifiedSignatureWarned = false
 }

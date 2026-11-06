@@ -1,109 +1,148 @@
-import { generateKeyPairSync } from "node:crypto"
-import { describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import { ProfileSignatureConfigurationError } from "./errors.js"
 import {
-  isCanonicalKeyVersion,
   loadProfileSignatureVerifierFromEnv,
+  prepareProfileSignatureVerifier,
 } from "./profileSignatureConfig.js"
-import { CONTRACT, environmentFor } from "./testdata/profileSignatureContract.js"
+import { isCanonicalKeyVersion } from "./profileSignatureVerifier.js"
+import {
+  TEST_AUDIENCE,
+  TEST_JWKS_URL,
+  fixedFetcher,
+} from "./testdata/profileSignatureContract.js"
 
-const TEST_PRIVATE_PEM_V1 = `-----BEGIN PRIVATE KEY-----
-MC4CAQAwBQYDK2VwBCIEIJ1hsZ3v/VpguoRK9JLsLMREScVpezJpGXA7rAMcrn9g
------END PRIVATE KEY-----
-`
+const URL_ENV = "MYCELIUM_JWKS_URL"
+const AUDIENCE_ENV = "MYC_PROFILE_SIGNATURE_AUDIENCE"
+const INSECURE_ENV = "MYCELIUM_JWKS_ALLOW_INSECURE_HTTP"
+const TOLERANCE_ENV = "MYC_PROFILE_SIGNATURE_TOLERANCE_SECONDS"
+
+const ENABLED = { [URL_ENV]: TEST_JWKS_URL, [AUDIENCE_ENV]: TEST_AUDIENCE }
+const HTTP_URL = "http://localhost:8080/.well-known/mycelium-profile-jwks.json"
+
+function load(env: Record<string, string>) {
+  return loadProfileSignatureVerifierFromEnv(env, fixedFetcher(["1"]))
+}
+
+function configurationError(env: Record<string, string>): Error {
+  try {
+    load(env)
+  } catch (error) {
+    expect(error).toBeInstanceOf(ProfileSignatureConfigurationError)
+    return error as Error
+  }
+  throw new Error("configuration error expected")
+}
+
+afterEach(() => vi.restoreAllMocks())
 
 describe("loadProfileSignatureVerifierFromEnv", () => {
-  it("is disabled without public keys", () => {
-    expect(loadProfileSignatureVerifierFromEnv({})).toBeUndefined()
-    expect(
-      loadProfileSignatureVerifierFromEnv({
-        MYC_PROFILE_SIGNATURE_TOLERANCE_SECONDS: "30",
-      })
-    ).toBeUndefined()
+  it("is enabled by MYCELIUM_JWKS_URL only", () => {
+    expect(load({})).toBeUndefined()
+    expect(load({ [AUDIENCE_ENV]: TEST_AUDIENCE })).toBeUndefined()
+    expect(load({ [TOLERANCE_ENV]: "30" })).toBeUndefined()
+    expect(load(ENABLED)).toBeDefined()
   })
 
-  it("loads a rotation keyset with defaults", () => {
+  it("reads the URL, tolerance and audience without network access", () => {
+    const fetcher = vi.fn(fixedFetcher(["1"]))
     const verifier = loadProfileSignatureVerifierFromEnv(
-      environmentFor(["2", "1"])
+      { ...ENABLED, [TOLERANCE_ENV]: "30" },
+      fetcher
     )
 
-    expect(verifier?.keyVersions).toEqual(["1", "2"])
-    expect(verifier?.toleranceSeconds).toBe(60)
-    expect(verifier?.expectedAudience).toBeUndefined()
+    expect(verifier?.store.url.href).toBe(TEST_JWKS_URL)
+    expect(verifier?.toleranceSeconds).toBe(30)
+    expect(verifier?.expectedAudience).toBe(TEST_AUDIENCE)
+    expect(verifier?.store.current().keys.size).toBe(0)
+    expect(fetcher).not.toHaveBeenCalled()
     expect(Object.isFrozen(verifier)).toBe(true)
   })
 
-  it("reads tolerance and audience", () => {
-    const verifier = loadProfileSignatureVerifierFromEnv(
-      environmentFor(["1"], {
-        MYC_PROFILE_SIGNATURE_TOLERANCE_SECONDS: "30",
-        MYC_PROFILE_SIGNATURE_AUDIENCE: "billing-api",
-      })
-    )
+  it("requires the audience when enabled", () => {
+    const error = configurationError({ [URL_ENV]: TEST_JWKS_URL })
 
-    expect(verifier?.toleranceSeconds).toBe(30)
-    expect(verifier?.expectedAudience).toBe("billing-api")
+    expect(error.message).toContain(AUDIENCE_ENV)
   })
 
-  const ed448 = generateKeyPairSync("ed448")
-    .publicKey.export({ type: "spki", format: "pem" })
-    .toString()
-  const rsa = generateKeyPairSync("rsa", { modulusLength: 2048 })
-    .publicKey.export({ type: "spki", format: "pem" })
-    .toString()
+  it("requires https unless the development switch is true", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined)
+    const http = { [URL_ENV]: HTTP_URL, [AUDIENCE_ENV]: TEST_AUDIENCE }
+
+    configurationError(http)
+    configurationError({ ...http, [INSECURE_ENV]: "false" })
+    expect(load({ ...http, [INSECURE_ENV]: " true " })).toBeDefined()
+    expect(console.warn).toHaveBeenCalledTimes(1)
+  })
 
   it.each([
-    ["tolerance zero", { MYC_PROFILE_SIGNATURE_TOLERANCE_SECONDS: "0" }],
-    ["tolerance negative", { MYC_PROFILE_SIGNATURE_TOLERANCE_SECONDS: "-5" }],
-    ["tolerance text", { MYC_PROFILE_SIGNATURE_TOLERANCE_SECONDS: "sixty" }],
-    ["tolerance fraction", { MYC_PROFILE_SIGNATURE_TOLERANCE_SECONDS: "1.5" }],
-    ["tolerance overflow", { MYC_PROFILE_SIGNATURE_TOLERANCE_SECONDS: "9007199254740992" }],
-    ["oversized tolerance", { MYC_PROFILE_SIGNATURE_TOLERANCE_SECONDS: "9".repeat(5000) }],
-    ["blank audience", { MYC_PROFILE_SIGNATURE_AUDIENCE: "  " }],
-    ["empty suffix", { MYC_PROFILE_PUBLIC_KEY_: "x" }],
-    ["zero suffix", { MYC_PROFILE_PUBLIC_KEY_0: "x" }],
-    ["leading zero suffix", { MYC_PROFILE_PUBLIC_KEY_01: "x" }],
-    ["overflow suffix", { MYC_PROFILE_PUBLIC_KEY_4294967296: "x" }],
-    ["named suffix", { MYC_PROFILE_PUBLIC_KEY_V1: "x" }],
-    ["empty value", { MYC_PROFILE_PUBLIC_KEY_1: "" }],
-    ["garbage", { MYC_PROFILE_PUBLIC_KEY_1: "not a pem" }],
-    ["private key", { MYC_PROFILE_PUBLIC_KEY_1: TEST_PRIVATE_PEM_V1 }],
-    ["ed448 key", { MYC_PROFILE_PUBLIC_KEY_1: ed448 }],
-    ["rsa key", { MYC_PROFILE_PUBLIC_KEY_1: rsa }],
+    ["relative URL", { ...ENABLED, [URL_ENV]: "/.well-known/jwks.json" }],
+    ["empty URL", { ...ENABLED, [URL_ENV]: "" }],
+    ["ftp URL", { ...ENABLED, [URL_ENV]: "ftp://gateway/jwks.json" }],
+    ["file URL", { ...ENABLED, [URL_ENV]: "file:///etc/jwks.json" }],
+    ["credentials", { ...ENABLED, [URL_ENV]: "https://user:pass@gateway/jwks.json" }],
+    ["switch not boolean", { ...ENABLED, [INSECURE_ENV]: "yes" }],
+    ["tolerance zero", { [TOLERANCE_ENV]: "0" }],
+    ["tolerance negative", { [TOLERANCE_ENV]: "-5" }],
+    ["tolerance text", { [TOLERANCE_ENV]: "sixty" }],
+    ["tolerance fraction", { [TOLERANCE_ENV]: "1.5" }],
+    ["tolerance overflow", { [TOLERANCE_ENV]: "9007199254740992" }],
+    ["oversized tolerance", { [TOLERANCE_ENV]: "9".repeat(5000) }],
+    ["blank audience", { [AUDIENCE_ENV]: "  " }],
+    ["switch invalid while disabled", { [INSECURE_ENV]: "maybe" }],
   ])("never disables on invalid config: %s", (_name, env) => {
-    let thrown: unknown
-    try {
-      loadProfileSignatureVerifierFromEnv(env)
-    } catch (error) {
-      thrown = error
-    }
+    const error = configurationError(env)
 
-    expect(thrown).toBeInstanceOf(ProfileSignatureConfigurationError)
-    expect(String((thrown as Error).message)).not.toContain("BEGIN")
+    expect(error.message).not.toContain("user:pass")
   })
 
+  it("accepts the maximum safe integer tolerance", () => {
+    const verifier = load({ ...ENABLED, [TOLERANCE_ENV]: "9007199254740991" })
+    expect(verifier?.toleranceSeconds).toBe(Number.MAX_SAFE_INTEGER)
+  })
+
+  it("reads process.env by default", () => {
+    process.env[URL_ENV] = TEST_JWKS_URL
+    process.env[AUDIENCE_ENV] = TEST_AUDIENCE
+    try {
+      expect(loadProfileSignatureVerifierFromEnv()?.expectedAudience).toBe(
+        TEST_AUDIENCE
+      )
+    } finally {
+      delete process.env[URL_ENV]
+      delete process.env[AUDIENCE_ENV]
+    }
+  })
+})
+
+describe("prepareProfileSignatureVerifier", () => {
+  it("downloads the keys before serving", async () => {
+    const verifier = await prepareProfileSignatureVerifier(
+      ENABLED,
+      fixedFetcher(["1", "2"])
+    )
+
+    expect([...(verifier?.store.current().keys.keys() ?? [])]).toEqual(["1", "2"])
+  })
+
+  it("rejects when the keys cannot be fetched", async () => {
+    await expect(
+      prepareProfileSignatureVerifier(ENABLED, async () => {
+        throw new Error("gateway down")
+      })
+    ).rejects.toThrow("gateway down")
+  })
+
+  it("resolves undefined when disabled", async () => {
+    expect(await prepareProfileSignatureVerifier({})).toBeUndefined()
+  })
+})
+
+describe("isCanonicalKeyVersion", () => {
   it("accepts only canonical versions", () => {
     expect(isCanonicalKeyVersion("1")).toBe(true)
     expect(isCanonicalKeyVersion("4294967295")).toBe(true)
     for (const raw of ["", "0", "01", "+1", " 1", "1.0", "4294967296"]) {
       expect(isCanonicalKeyVersion(raw)).toBe(false)
-    }
-  })
-
-  it("accepts the maximum safe integer tolerance", () => {
-    const verifier = loadProfileSignatureVerifierFromEnv(environmentFor(["1"], {
-      MYC_PROFILE_SIGNATURE_TOLERANCE_SECONDS: "9007199254740991",
-    }))
-    expect(verifier?.toleranceSeconds).toBe(Number.MAX_SAFE_INTEGER)
-  })
-
-  it("reads process.env by default", () => {
-    const name = "MYC_PROFILE_PUBLIC_KEY_7"
-    process.env[name] = CONTRACT.publicKeys["1"]
-    try {
-      expect(loadProfileSignatureVerifierFromEnv()?.keyVersions).toContain("7")
-    } finally {
-      delete process.env[name]
     }
   })
 })

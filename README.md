@@ -112,37 +112,77 @@ When the gateway is configured with `[core.profileSigning]`, it adds
 `x-mycelium-profile-signature` to every request that carries
 `x-mycelium-profile`: a compact JWS (`alg: EdDSA`, `kid: <key version>`) over
 `{iat, ph, aud}`, where `ph` is the SHA-256 of the exact profile header and
-`aud` the downstream service name. Verification is local (`jose`), with no
-call to the gateway and no key fetching.
+`aud` the downstream service name. The gateway publishes its public keys as a
+JWKS at `/.well-known/mycelium-profile-jwks.json`; this SDK downloads them
+(Node's built-in `fetch`), caches them and verifies every signature locally.
 
 > **Rollout order is mandatory.** Confirm the gateway in front of this service
-> is already signing **before** setting any public key here. A service that
-> verifies behind a gateway that does not sign rejects every request (403).
-> To roll back, remove the public keys here first, then disable signing in the
-> gateway.
+> is already signing **before** setting `MYCELIUM_JWKS_URL` here. A service
+> that verifies behind a gateway that does not sign rejects every request
+> (403). To roll back, unset `MYCELIUM_JWKS_URL` here first, then disable
+> signing in the gateway.
 
-Set the gateway's **public** key(s) (PEM SubjectPublicKeyInfo, real line
-breaks) before creating the middleware or registering the plugin:
+Point the SDK at the gateway JWKS before creating the middleware or
+registering the plugin:
 
 ```bash
-export MYC_PROFILE_PUBLIC_KEY_1="$(cat profile-signing-v1.pub.pem)"
-export MYC_PROFILE_PUBLIC_KEY_2="$(cat profile-signing-v2.pub.pem)"  # rotation
+export MYCELIUM_JWKS_URL="https://gateway.internal/.well-known/mycelium-profile-jwks.json"
+export MYC_PROFILE_SIGNATURE_AUDIENCE=billing-api   # required: this service's name in the gateway
 export MYC_PROFILE_SIGNATURE_TOLERANCE_SECONDS=60   # optional, default 60
-export MYC_PROFILE_SIGNATURE_AUDIENCE=billing-api   # optional
+# export MYCELIUM_JWKS_ALLOW_INSECURE_HTTP=true     # local development only (http:// URL)
 ```
 
 The environment is read once, when `profileMiddleware()` /
 `getProfileFromHeaderRequired()` are called or `fastifyProfilePlugin` is
-registered. Invalid configuration throws `ProfileSignatureConfigurationError`
-there, so the application does not start. Load `.env` files before that point.
+registered. Invalid configuration (non-`https` URL without the development
+switch, URL with credentials, missing audience, invalid tolerance) throws
+`ProfileSignatureConfigurationError` there, so the application does not
+start. Load `.env` files before that point.
+
+**When the keys are downloaded:** on the first signed request, in both
+Express and Fastify. Requests only reach this service through the gateway, so
+when one arrives the gateway (and its JWKS) is up: the service never depends
+on the gateway to start, and the two can be started in any order. Until the
+keys are downloaded, requests fail closed (403) and the download is retried at
+most every 5 seconds.
+
+To download the keys at startup instead (and refuse to start when the
+gateway keys cannot be fetched), prepare the verifier yourself and pass it in
+(`fastifyProfilePlugin` takes the same `signatureVerifier` option):
+
+```ts
+import { prepareProfileSignatureVerifier } from "@lepistabioinformatics/mycelium-sdk"
+
+// validates the settings and downloads the JWKS; rejects with
+// ProfileJwksFetchError when the keys cannot be downloaded
+const signatureVerifier = await prepareProfileSignatureVerifier()
+app.use(profileMiddleware({ signatureVerifier }))
+```
 
 With verification enabled, the Express middlewares and the Fastify plugin
 verify before decoding and answer **403** `Unable to verify Mycelium profile`
 on signature rejection, in every environment (the development leniency never
 applies). Duplicate headers are rejected. `next()` / the route handler only
 run after the signature is accepted. Unexpected internal failures return generic
-500 without invoking the handler. Without the variables nothing changes.
-Tolerance must be a positive safe integer (<= 9007199254740991).
+500 without invoking the handler. Without `MYCELIUM_JWKS_URL` nothing changes,
+except that a signed profile logs one `console.warn` per process
+(`MYCELIUM_JWKS_URL` is not set, so nothing is verified). Tolerance must be a
+positive safe integer (<= 9007199254740991).
+
+Key handling follows the gateway contract (`jwks-vectors.json`):
+
+- the set is cached for the `max-age` sent by the gateway (bounded to
+  1 minute..1 day, 12 hours when absent), then refreshed;
+- a signature with an unknown `kid` triggers one refetch, at most every
+  30 seconds and shared by concurrent requests, so gateway key rotation needs
+  no change or restart here;
+- if a refresh fails, the last valid set is kept and the failure is logged
+  (`console.warn`, prefixed `[mycelium-sdk]`);
+- the fetch is bounded (5 seconds, 64 KiB, redirects never followed) and a
+  set with private material, another key type, a wrong key length or a
+  non-canonical/repeated `kid` is refused as a whole.
+
+The JWKS URL comes only from configuration, never from a request.
 
 ```ts
 app.use(
@@ -153,28 +193,24 @@ app.use(
 )
 ```
 
-Custom integrations can use the strict API. It is asynchronous: always
+Custom integrations can use the verifier directly. It is asynchronous: always
 `await` it. `decodeAndDecompressProfileFromBase64` does **not** verify:
 
 ```ts
-import {
-  loadProfileSignatureVerifierFromEnv,
-  verifyAndDecodeProfile,
-} from "@lepistabioinformatics/mycelium-sdk"
+import { prepareProfileSignatureVerifier } from "@lepistabioinformatics/mycelium-sdk"
 
-const verifier = loadProfileSignatureVerifierFromEnv() // once, at startup
+const verifier = await prepareProfileSignatureVerifier() // once, at startup
 if (!verifier) throw new Error("Profile verification must be configured for this service")
-const profile = await verifyAndDecodeProfile(profileHeader, signatureHeader, verifier)
+const profile = await verifier.verifyAndDecode(profileHeader, signatureHeader)
 ```
 
 Diagnostic callbacks may return a promise. The SDK awaits it and contains both
 synchronous exceptions and promise rejections, returning generic 500 without
 executing the handler. Keep application callbacks bounded.
 
-Limits (by design): a captured valid pair can be replayed during the
-tolerance window (and to other services unless
-`MYC_PROFILE_SIGNATURE_AUDIENCE` is set); only `x-mycelium-profile` is signed.
-Mount the middleware only on routes that require a profile.
+Limits (by design): a captured valid pair can be replayed to the same service
+during the tolerance window; only `x-mycelium-profile` is signed. Mount the
+middleware only on routes that require a profile.
 
 Rust wire permissions `"read"` / `"write"` are accepted and normalized to the
 SDK's existing numeric `Permission.READ = 0` / `Permission.WRITE = 1` API.
@@ -182,12 +218,14 @@ The optional Rust `verboseStatus: null` is accepted without weakening enum check
 
 ## Error handling
 
-All SDK errors extend `MyceliumError` (`message`, `code`, `expTrue`):
+All SDK errors extend `MyceliumError` (`message`, `code`, `expTrue`), except
+`ProfileJwksFetchError` (a plain `Error`, raised when the gateway JWKS cannot be
+downloaded):
 
 | Error | Code | Thrown by |
 |---|---|---|
 | `ProfileSignatureError` | `MYC_PROFILE_SIGNATURE_INVALID` | `verifyProfileSignature` / `verifyAndDecodeProfile` (carries a log-safe `reason`) |
-| `ProfileSignatureConfigurationError` | `MYC_PROFILE_SIGNATURE_CONFIG_INVALID` | Invalid `MYC_PROFILE_*` configuration |
+| `ProfileSignatureConfigurationError` | `MYC_PROFILE_SIGNATURE_CONFIG_INVALID` | Invalid `MYCELIUM_JWKS_*` / `MYC_PROFILE_SIGNATURE_*` setting, or an unsafe JWKS |
 | `ProfileDecodingError` | `MYC00020` | `decodeAndDecompressProfileFromBase64` on any decode/validation failure |
 | `InsufficientLicensesError` | `MYC00019` | `getRelatedAccountOrError()` when licensed resources are present but empty |
 | `InsufficientPrivilegesError` | `MYC00019` | Any fluent method that requires a privilege the profile lacks (carries `filteringState` for debugging) |

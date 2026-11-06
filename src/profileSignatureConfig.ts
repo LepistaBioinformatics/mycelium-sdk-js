@@ -1,50 +1,23 @@
-import { createPublicKey, type KeyObject } from "node:crypto"
 import { ProfileSignatureConfigurationError } from "./errors.js"
 import {
+  fetchProfileJwks,
+  type ProfileJwksFetcher,
+} from "./jwks/fetchProfileJwks.js"
+import { JwksProfileSignatureVerifier } from "./jwks/jwksProfileSignatureVerifier.js"
+import { parseProfileJwksUrl } from "./jwks/parseProfileJwksUrl.js"
+import { ProfileKeyStore } from "./jwks/profileKeyStore.js"
+import {
   DEFAULT_PROFILE_SIGNATURE_TOLERANCE_SECONDS,
-  PROFILE_PUBLIC_KEY_ENV_PREFIX,
+  PROFILE_JWKS_ALLOW_INSECURE_HTTP_ENV,
+  PROFILE_JWKS_REFETCH_COOLDOWN_SECONDS,
+  PROFILE_JWKS_URL_ENV,
   PROFILE_SIGNATURE_AUDIENCE_ENV,
   PROFILE_SIGNATURE_TOLERANCE_ENV,
 } from "./settings.js"
 
 const CANONICAL_POSITIVE_INTEGER = /^[1-9][0-9]*$/
-const MAX_KEY_VERSION = 4_294_967_295
 
 export type EnvironmentSource = Readonly<Record<string, string | undefined>>
-
-/**
- * Immutable verification settings: trusted Ed25519 keys by `kid`.
- *
- * The key map is private; callers can only look keys up.
- */
-export class ProfileSignatureVerifier {
-  readonly #keys: ReadonlyMap<string, KeyObject>
-  readonly toleranceSeconds: number
-  readonly expectedAudience: string | undefined
-
-  constructor(
-    keys: ReadonlyMap<string, KeyObject>,
-    toleranceSeconds: number,
-    expectedAudience?: string
-  ) {
-    this.#keys = new Map(keys)
-    this.toleranceSeconds = toleranceSeconds
-    this.expectedAudience = expectedAudience
-    Object.freeze(this)
-  }
-
-  keyFor(kid: string): KeyObject | undefined {
-    return this.#keys.get(kid)
-  }
-
-  get keyVersions(): string[] {
-    return [...this.#keys.keys()].sort()
-  }
-}
-
-export function isCanonicalKeyVersion(raw: string): boolean {
-  return CANONICAL_POSITIVE_INTEGER.test(raw) && Number(raw) <= MAX_KEY_VERSION
-}
 
 function parseTolerance(env: EnvironmentSource): number {
   const raw = env[PROFILE_SIGNATURE_TOLERANCE_ENV]
@@ -74,73 +47,67 @@ function parseAudience(env: EnvironmentSource): string | undefined {
   return raw
 }
 
-function importPublicKey(name: string, pem: string | undefined): KeyObject {
-  if (pem === undefined || pem.trim() === "") {
-    throw new ProfileSignatureConfigurationError(`${name} is empty`)
-  }
+function parseInsecureSwitch(env: EnvironmentSource): boolean {
+  const raw = env[PROFILE_JWKS_ALLOW_INSECURE_HTTP_ENV]?.trim()
+  if (raw === undefined || raw === "false") return false
+  if (raw === "true") return true
 
-  let keyObject: KeyObject
-  try {
-    keyObject = createPublicKey({ key: pem, format: "pem" })
-  } catch {
-    throw new ProfileSignatureConfigurationError(
-      `${name} is not a PEM SubjectPublicKeyInfo public key`
-    )
-  }
-
-  // createPublicKey derives a public key from a private PEM: reject that, the
-  // consumer must never hold the gateway's private key.
-  if (pem.includes("PRIVATE KEY")) {
-    throw new ProfileSignatureConfigurationError(
-      `${name} contains a private key; configure the public key only`
-    )
-  }
-
-  if (keyObject.asymmetricKeyType !== "ed25519") {
-    throw new ProfileSignatureConfigurationError(
-      `${name} is not an Ed25519 public key`
-    )
-  }
-
-  return keyObject
-}
-
-function loadPublicKeys(env: EnvironmentSource): Map<string, KeyObject> {
-  const keys = new Map<string, KeyObject>()
-  const names = Object.keys(env)
-    .filter((name) => name.startsWith(PROFILE_PUBLIC_KEY_ENV_PREFIX))
-    .sort()
-
-  for (const name of names) {
-    const version = name.slice(PROFILE_PUBLIC_KEY_ENV_PREFIX.length)
-    if (!isCanonicalKeyVersion(version)) {
-      throw new ProfileSignatureConfigurationError(
-        `${name}: key version suffix must be a canonical positive integer (for example MYC_PROFILE_PUBLIC_KEY_1)`
-      )
-    }
-
-    keys.set(version, importPublicKey(name, env[name]))
-  }
-
-  return keys
+  throw new ProfileSignatureConfigurationError(
+    `${PROFILE_JWKS_ALLOW_INSECURE_HTTP_ENV} must be true or false`
+  )
 }
 
 /**
  * Build the verifier from an environment snapshot (default `process.env`).
  *
- * Returns `undefined` when no `MYC_PROFILE_PUBLIC_KEY_*` exists (verification
- * disabled, legacy behavior). Throws `ProfileSignatureConfigurationError` for
- * any invalid entry: an invalid configuration never means "disabled".
- * Synchronous, so Express factories and Fastify registration fail at startup.
+ * Returns `undefined` when `MYCELIUM_JWKS_URL` is absent (verification
+ * disabled, legacy behavior). With the URL set, `MYC_PROFILE_SIGNATURE_AUDIENCE`
+ * is required. Every present setting is validated even when disabled; an
+ * invalid one throws `ProfileSignatureConfigurationError`, never "disabled".
+ *
+ * Synchronous and network-free: the keys are fetched on first use. Prefer
+ * `prepareProfileSignatureVerifier()` at startup to download them before
+ * serving.
  */
 export function loadProfileSignatureVerifierFromEnv(
-  env: EnvironmentSource = process.env
-): ProfileSignatureVerifier | undefined {
+  env: EnvironmentSource = process.env,
+  fetcher: ProfileJwksFetcher = fetchProfileJwks
+): JwksProfileSignatureVerifier | undefined {
   const toleranceSeconds = parseTolerance(env)
-  const expectedAudience = parseAudience(env)
-  const keys = loadPublicKeys(env)
+  const audience = parseAudience(env)
+  const allowInsecureHttp = parseInsecureSwitch(env)
 
-  if (keys.size === 0) return undefined
+  const rawUrl = env[PROFILE_JWKS_URL_ENV]
+  if (rawUrl === undefined) return undefined
 
-  return new ProfileSignatureVerifier(keys, toleranceSeconds, expectedAudience)
+  const url = parseProfileJwksUrl(rawUrl, allowInsecureHttp)
+  if (audience === undefined) {
+    throw new ProfileSignatureConfigurationError(
+      `${PROFILE_SIGNATURE_AUDIENCE_ENV} is required when ${PROFILE_JWKS_URL_ENV} is set`
+    )
+  }
+
+  const store = new ProfileKeyStore(
+    url,
+    fetcher,
+    PROFILE_JWKS_REFETCH_COOLDOWN_SECONDS
+  )
+  return new JwksProfileSignatureVerifier(store, toleranceSeconds, audience)
+}
+
+/**
+ * Opt-in: read the settings and download the gateway JWKS before serving.
+ *
+ * Rejects on invalid settings or when the keys cannot be fetched. Without
+ * it, the Express and Fastify integrations download the keys on the first
+ * signed request, so the service does not depend on the gateway to start.
+ * Resolves `undefined` when verification is disabled.
+ */
+export async function prepareProfileSignatureVerifier(
+  env: EnvironmentSource = process.env,
+  fetcher: ProfileJwksFetcher = fetchProfileJwks
+): Promise<JwksProfileSignatureVerifier | undefined> {
+  const verifier = loadProfileSignatureVerifierFromEnv(env, fetcher)
+  await verifier?.prefetch()
+  return verifier
 }

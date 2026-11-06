@@ -1,14 +1,14 @@
 import Fastify from "fastify"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { ProfileSignatureConfigurationError } from "../errors.js"
-import { loadProfileSignatureVerifierFromEnv } from "../profileSignatureConfig.js"
 import {
   DEFAULT_PROFILE_KEY,
   DEFAULT_PROFILE_SIGNATURE_KEY,
 } from "../settings.js"
 import {
   CONTRACT,
-  environmentFor,
+  TEST_AUDIENCE,
+  jwksVerifierFor,
   vectorNamed,
 } from "../testdata/profileSignatureContract.js"
 import { fastifyProfilePlugin } from "./index.js"
@@ -22,7 +22,7 @@ async function buildApp(calls: { count: number }, reasons: string[], environment
   const app = Fastify()
   await app.register(fastifyProfilePlugin, {
     environment,
-    signatureVerifier: loadProfileSignatureVerifierFromEnv(environmentFor(["1"])),
+    signatureVerifier: jwksVerifierFor(["1"]),
     onSignatureRejected: (reason) => reasons.push(reason),
   })
   app.get("/whoami", async (request) => {
@@ -108,14 +108,19 @@ describe("fastifyProfilePlugin with verification enabled", () => {
 })
 
 describe("fastifyProfilePlugin registration", () => {
-  const variable = "MYC_PROFILE_PUBLIC_KEY_1"
+  const variables = [
+    "MYCELIUM_JWKS_URL",
+    "MYCELIUM_JWKS_ALLOW_INSECURE_HTTP",
+    "MYC_PROFILE_SIGNATURE_AUDIENCE",
+  ]
 
   afterEach(() => {
-    delete process.env[variable]
+    for (const variable of variables) delete process.env[variable]
+    vi.restoreAllMocks()
   })
 
   it("invalid configuration fails the registration", async () => {
-    process.env[variable] = "broken"
+    process.env.MYCELIUM_JWKS_URL = "https://gateway.test/jwks.json"
     const app = Fastify()
 
     await expect(
@@ -123,7 +128,28 @@ describe("fastifyProfilePlugin registration", () => {
     ).rejects.toBeInstanceOf(ProfileSignatureConfigurationError)
   })
 
+  it("starts without the gateway keys and fails requests closed", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined)
+    process.env.MYCELIUM_JWKS_URL = "http://127.0.0.1:1/jwks.json"
+    process.env.MYCELIUM_JWKS_ALLOW_INSECURE_HTTP = "true"
+    process.env.MYC_PROFILE_SIGNATURE_AUDIENCE = TEST_AUDIENCE
+    const app = Fastify()
+    await app.register(fastifyProfilePlugin, { environment: "production" })
+    let handled = 0
+    app.get("/whoami", async () => {
+      handled += 1
+      return {}
+    })
+
+    const response = await app.inject({ method: "GET", url: "/whoami", headers: signed() })
+
+    expect(response.statusCode).toBe(403)
+    expect(handled).toBe(0)
+    await app.close()
+  })
+
   it("without configuration the signature header is ignored", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined)
     const app = Fastify()
     await app.register(fastifyProfilePlugin, { environment: "production" })
     app.get("/whoami", async (request) => ({ accId: request.profile?.accId ?? null }))

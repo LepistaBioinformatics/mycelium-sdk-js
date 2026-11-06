@@ -9,7 +9,7 @@ import type { Profile } from "../models/profile.js"
 import {
   isCanonicalKeyVersion,
   type ProfileSignatureVerifier,
-} from "../profileSignatureConfig.js"
+} from "../profileSignatureVerifier.js"
 import { MAX_PROFILE_SIGNATURE_BYTES } from "../settings.js"
 import { decodeAndDecompressProfileFromBase64 } from "./decodeAndDecompressProfileFromBase64.js"
 

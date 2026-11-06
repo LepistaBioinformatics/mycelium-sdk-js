@@ -1,6 +1,11 @@
+import { createPublicKey, type KeyObject } from "node:crypto"
 import { readFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
+import type { ProfileJwksFetcher } from "../jwks/fetchProfileJwks.js"
+import type { JwksProfileSignatureVerifier } from "../jwks/jwksProfileSignatureVerifier.js"
+import { loadProfileSignatureVerifierFromEnv } from "../profileSignatureConfig.js"
+import { ProfileSignatureVerifier } from "../profileSignatureVerifier.js"
 
 /**
  * Test-only loader for the gateway-produced profile signature vectors.
@@ -55,15 +60,91 @@ export function vectorNamed(name: string): ContractVector {
   return vector
 }
 
-export function environmentFor(
-  versions: string[],
-  extra: Record<string, string> = {}
-): Record<string, string> {
-  const env: Record<string, string> = { ...extra }
+/** The audience every gateway-signed vector carries in `aud`. */
+export const TEST_AUDIENCE = "billing-api"
+
+export const TEST_JWKS_URL = "https://gateway.test/.well-known/mycelium-profile-jwks.json"
+
+/** The contract public keys of the given versions, by `kid`. */
+export function publicKeysFor(versions: string[]): Map<string, KeyObject> {
+  const keys = new Map<string, KeyObject>()
   for (const version of versions) {
     const pem = CONTRACT.publicKeys[version]
     if (pem === undefined) throw new Error(`unknown key ${version}`)
-    env[`MYC_PROFILE_PUBLIC_KEY_${version}`] = pem
+    keys.set(version, createPublicKey({ key: pem, format: "pem" }))
   }
-  return env
+  return keys
 }
+
+/** A per-request verifier over fixed keys (no JWKS). */
+export function staticVerifierFor(
+  versions: string[],
+  toleranceSeconds = 60,
+  expectedAudience?: string
+): ProfileSignatureVerifier {
+  return new ProfileSignatureVerifier(
+    publicKeysFor(versions),
+    toleranceSeconds,
+    expectedAudience
+  )
+}
+
+/** A gateway stand-in that always publishes the given versions. */
+export function fixedFetcher(
+  versions: string[],
+  maxAgeSeconds = 600
+): ProfileJwksFetcher {
+  return async () => ({ keys: publicKeysFor(versions), maxAgeSeconds })
+}
+
+/** A JWKS-backed verifier whose gateway publishes the given versions. */
+export function jwksVerifierFor(
+  versions: string[],
+  extra: Record<string, string> = {}
+): JwksProfileSignatureVerifier {
+  const verifier = loadProfileSignatureVerifierFromEnv(
+    {
+      MYCELIUM_JWKS_URL: TEST_JWKS_URL,
+      MYC_PROFILE_SIGNATURE_AUDIENCE: TEST_AUDIENCE,
+      ...extra,
+    },
+    fixedFetcher(versions)
+  )
+  if (verifier === undefined) throw new Error("verifier expected")
+  return verifier
+}
+
+// ? ---------------------------------------------------------------------------
+// ? JWKS contract (jwks-vectors.json)
+// ? ---------------------------------------------------------------------------
+
+export interface JwksContractVector {
+  name: string
+  description: string
+  document: string
+  expected: "valid" | "invalid_jwks"
+  expectedKids: string[]
+}
+
+export interface JwksCacheVector {
+  cacheControl: string | null
+  expectedSeconds: number
+}
+
+export interface JwksContract {
+  contract: Record<string, string | number>
+  published: string
+  vectors: JwksContractVector[]
+  cacheControl: JwksCacheVector[]
+}
+
+export const JWKS_CONTRACT_FILE = join(here, "profile-signature", "jwks-vectors.json")
+
+export const GATEWAY_JWKS_CONTRACT_FILE = join(
+  dirname(GATEWAY_CONTRACT_FILE),
+  "jwks-vectors.json"
+)
+
+export const JWKS_CONTRACT = JSON.parse(
+  readFileSync(JWKS_CONTRACT_FILE, "utf8")
+) as JwksContract
