@@ -5,8 +5,8 @@ import {
 } from "../functions/decodeAndDecompressProfileFromBase64.js"
 import type { Profile } from "../models/profile.js"
 import type { JwksProfileSignatureVerifier } from "../jwks/jwksProfileSignatureVerifier.js"
-import { loadProfileSignatureVerifierFromEnv } from "../profileSignatureConfig.js"
 import {
+  sharedProfileSignatureVerifier,
   verifyRequestProfile,
   warnWhenSignatureIsIgnored,
   type SignatureRejectionListener,
@@ -23,8 +23,10 @@ export interface FastifyProfilePluginOptions {
   environment?: string
   /**
    * Pre-built verifier. Defaults to `MYCELIUM_JWKS_URL` (and the related
-   * variables) from `process.env`, read once at registration: invalid
-   * configuration fails the registration. The gateway keys are downloaded on
+   * variables) from `process.env`, read at registration: invalid
+   * configuration fails the registration. The resulting verifier is built
+   * once per process and shared with the Express middlewares (one key
+   * cache). The gateway keys are downloaded on
    * the first signed request (requests fail closed until they are available),
    * so the service never waits for the gateway to start. To download them
    * at startup instead, pass `await prepareProfileSignatureVerifier()`.
@@ -50,7 +52,7 @@ const fastifyProfilePluginImpl: FastifyPluginAsync<
   fastify.decorateRequest("profile", undefined)
 
   const verifier =
-    opts.signatureVerifier ?? loadProfileSignatureVerifierFromEnv()
+    opts.signatureVerifier ?? sharedProfileSignatureVerifier()
 
   if (verifier !== undefined) {
     // Verification enabled: reply 403/500 in every environment and never

@@ -116,6 +116,102 @@ describe("JwksProfileSignatureVerifier key cache", () => {
     expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("refresh_failed"))
   })
 
+  it("stamps the cooldown when the fetch finishes, not when it starts", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined)
+    let now = 0
+    let fetches = 0
+    const hangingFetcher: ProfileJwksFetcher = async () => {
+      fetches += 1
+      await Promise.resolve()
+      now += 5_000
+      throw new Error("timed out")
+    }
+    const store = new ProfileKeyStore(URL_, hangingFetcher, 30, () => now)
+    const verifier = new JwksProfileSignatureVerifier(store, 60, TEST_AUDIENCE)
+
+    const reasons = await Promise.all(
+      Array.from({ length: 8 }, () => reasonOf(verify(verifier, "1")))
+    )
+
+    expect(reasons).toEqual(Array(8).fill("unknown_key"))
+    expect(fetches).toBe(1)
+
+    now += 4_999
+    expect(await reasonOf(verify(verifier, "1"))).toBe("unknown_key")
+    expect(fetches).toBe(1)
+
+    now += 1
+    expect(await reasonOf(verify(verifier, "1"))).toBe("unknown_key")
+    expect(fetches).toBe(2)
+  })
+
+  it("never waits for another request's refresh while keys are cached", async () => {
+    let now = 0
+    let release: () => void = () => undefined
+    let hang = false
+    let fetches = 0
+    const fetcher: ProfileJwksFetcher = async () => {
+      fetches += 1
+      if (hang) await new Promise<void>((resolve) => (release = resolve))
+      return { keys: publicKeysFor(["1"]), maxAgeSeconds: 60 }
+    }
+    const store = new ProfileKeyStore(URL_, fetcher, 30, () => now)
+    const verifier = new JwksProfileSignatureVerifier(store, 60, TEST_AUDIENCE)
+    await verifier.prefetch()
+
+    hang = true
+    now = 60_000
+    const refreshing = reasonOf(verify(verifier, "1"))
+
+    expect(await reasonOf(verify(verifier, "1"))).toBe("valid")
+    expect(fetches).toBe(2)
+
+    release()
+    expect(await refreshing).toBe("valid")
+    expect(fetches).toBe(2)
+  })
+
+  it("waits for the first fetch while no key set was ever stored", async () => {
+    let release: () => void = () => undefined
+    let fetches = 0
+    const fetcher: ProfileJwksFetcher = async () => {
+      fetches += 1
+      await new Promise<void>((resolve) => (release = resolve))
+      return { keys: publicKeysFor(["1"]), maxAgeSeconds: 60 }
+    }
+    const store = new ProfileKeyStore(URL_, fetcher, 30)
+    const verifier = new JwksProfileSignatureVerifier(store, 60, TEST_AUDIENCE)
+
+    const first = reasonOf(verify(verifier, "1"))
+    const second = reasonOf(verify(verifier, "1"))
+    await Promise.resolve()
+    release()
+
+    expect(await Promise.all([first, second])).toEqual(["valid", "valid"])
+    expect(fetches).toBe(1)
+  })
+
+  it("stops trusting a set one day after it expired, until a refresh succeeds", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined)
+    let now = 0
+    const gateway = new FakeGateway(["1"], 60)
+    const store = new ProfileKeyStore(URL_, gateway.fetcher, 0, () => now)
+    const verifier = new JwksProfileSignatureVerifier(store, 60, TEST_AUDIENCE)
+    await verifier.prefetch()
+    gateway.published = undefined
+
+    now = 60_000 + 86_400_000 - 1
+    expect(await reasonOf(verify(verifier, "1"))).toBe("valid")
+
+    now = 60_000 + 86_400_000
+    expect(await reasonOf(verify(verifier, "1"))).toBe("unknown_key")
+    expect(store.current().keys.size).toBe(0)
+
+    gateway.published = ["1"]
+    expect(await reasonOf(verify(verifier, "1"))).toBe("valid")
+    expect(store.current().keys.size).toBe(1)
+  })
+
   it("refreshes an expired set", async () => {
     let now = 0
     const gateway = new FakeGateway(["1"], 60)

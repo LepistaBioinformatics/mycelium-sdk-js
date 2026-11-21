@@ -1,12 +1,14 @@
 import Fastify from "fastify"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { ProfileSignatureConfigurationError } from "../errors.js"
+import { resetSharedProfileSignatureVerifier } from "../profileSignatureEnforcement.js"
 import {
   DEFAULT_PROFILE_KEY,
   DEFAULT_PROFILE_SIGNATURE_KEY,
 } from "../settings.js"
 import {
   CONTRACT,
+  JWKS_CONTRACT,
   TEST_AUDIENCE,
   jwksVerifierFor,
   vectorNamed,
@@ -116,11 +118,12 @@ describe("fastifyProfilePlugin registration", () => {
 
   afterEach(() => {
     for (const variable of variables) delete process.env[variable]
+    resetSharedProfileSignatureVerifier()
     vi.restoreAllMocks()
   })
 
   it("invalid configuration fails the registration", async () => {
-    process.env.MYCELIUM_JWKS_URL = "https://gateway.test/jwks.json"
+    process.env.MYCELIUM_JWKS_URL = "https://gateway.test/.well-known/mycelium-profile-jwks.json"
     const app = Fastify()
 
     await expect(
@@ -128,9 +131,36 @@ describe("fastifyProfilePlugin registration", () => {
     ).rejects.toBeInstanceOf(ProfileSignatureConfigurationError)
   })
 
+  it("every registration shares one key store per process", async () => {
+    process.env.MYCELIUM_JWKS_URL = "https://gateway.test/.well-known/mycelium-profile-jwks.json"
+    process.env.MYC_PROFILE_SIGNATURE_AUDIENCE = TEST_AUDIENCE
+    vi.spyOn(Date, "now").mockReturnValue(VALID.nowSeconds * 1000)
+    const fetchJwks = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () =>
+        new Response(JWKS_CONTRACT.published, {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })
+    )
+
+    for (let index = 0; index < 2; index += 1) {
+      const app = Fastify()
+      await app.register(fastifyProfilePlugin, { environment: "production" })
+      app.get("/whoami", async (request) => ({ accId: request.profile?.accId }))
+
+      const response = await app.inject({ method: "GET", url: "/whoami", headers: signed() })
+
+      expect(response.statusCode).toBe(200)
+      expect(response.json()).toEqual({ accId: ACCOUNT })
+      await app.close()
+    }
+
+    expect(fetchJwks).toHaveBeenCalledTimes(1)
+  })
+
   it("starts without the gateway keys and fails requests closed", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => undefined)
-    process.env.MYCELIUM_JWKS_URL = "http://127.0.0.1:1/jwks.json"
+    process.env.MYCELIUM_JWKS_URL = "http://127.0.0.1:1/.well-known/mycelium-profile-jwks.json"
     process.env.MYCELIUM_JWKS_ALLOW_INSECURE_HTTP = "true"
     process.env.MYC_PROFILE_SIGNATURE_AUDIENCE = TEST_AUDIENCE
     const app = Fastify()

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto"
 import { existsSync, readFileSync } from "node:fs"
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { ProfileSignatureConfigurationError } from "../errors.js"
 import {
   PROFILE_JWKS_DEFAULT_MAX_AGE_SECONDS,
@@ -20,6 +20,7 @@ import {
   publicKeysFor,
 } from "../testdata/profileSignatureContract.js"
 import { parseProfileJwks } from "./parseProfileJwks.js"
+import { parseProfileJwksUrl } from "./parseProfileJwksUrl.js"
 import { readJwksCacheMaxAge } from "./readJwksCacheMaxAge.js"
 
 function outcomeOf(document: string): [string, string[]] {
@@ -49,6 +50,31 @@ describe("profile JWKS contract (gateway → JS)", () => {
       expect(readJwksCacheMaxAge(vector.cacheControl)).toBe(vector.expectedSeconds)
     }
   )
+
+  it.each(
+    JWKS_CONTRACT.urls.map(
+      (vector) =>
+        [JSON.stringify(vector.configured), vector.allowInsecureHttp, vector] as const
+    )
+  )("MYCELIUM_JWKS_URL %s (insecure HTTP allowed: %s)", (_configured, _allow, vector) => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    try {
+      const resolve = () =>
+        parseProfileJwksUrl(vector.configured, vector.allowInsecureHttp).href
+
+      if (vector.resolved === null) {
+        expect(resolve).toThrow(ProfileSignatureConfigurationError)
+      } else {
+        expect(resolve()).toBe(vector.resolved)
+      }
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it("covers the MYCELIUM_JWKS_URL forms", () => {
+    expect(JWKS_CONTRACT.urls.length).toBeGreaterThan(0)
+  })
 
   it("published document carries the same keys as the signature vectors", () => {
     const published = parseProfileJwks(JWKS_CONTRACT.published)

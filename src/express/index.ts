@@ -5,9 +5,9 @@ import {
 } from "../functions/decodeAndDecompressProfileFromBase64.js"
 import type { Profile } from "../models/profile.js"
 import type { JwksProfileSignatureVerifier } from "../jwks/jwksProfileSignatureVerifier.js"
-import { loadProfileSignatureVerifierFromEnv } from "../profileSignatureConfig.js"
 import {
   SIGNATURE_INTERNAL_DETAIL,
+  sharedProfileSignatureVerifier,
   verifyRequestProfile,
   warnWhenSignatureIsIgnored,
   type SignatureRejectionListener,
@@ -26,10 +26,12 @@ declare global {
 export interface ProfileSignatureOptions {
   /**
    * Pre-built verifier. Defaults to `MYCELIUM_JWKS_URL` (and the related
-   * variables) from `process.env`, read once when the middleware is created;
-   * the gateway keys are fetched on the first signed request (requests fail
-   * closed until they are available). Invalid configuration throws here, so
-   * the application fails to start. Pass
+   * variables) from `process.env`, read when the middleware is created; the
+   * resulting verifier is built once per process and shared by every
+   * middleware and by the Fastify plugin (one key cache). The gateway keys
+   * are fetched on the first signed request (requests fail closed until they
+   * are available). Invalid configuration throws here, so the application
+   * fails to start. Pass
    * `await prepareProfileSignatureVerifier()` to download the keys at startup.
    */
   signatureVerifier?: JwksProfileSignatureVerifier
@@ -44,7 +46,7 @@ export interface ProfileMiddlewareOptions extends ProfileSignatureOptions {
 function resolveVerifier(
   opts: ProfileSignatureOptions
 ): JwksProfileSignatureVerifier | undefined {
-  return opts.signatureVerifier ?? loadProfileSignatureVerifierFromEnv()
+  return opts.signatureVerifier ?? sharedProfileSignatureVerifier()
 }
 
 /**

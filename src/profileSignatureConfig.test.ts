@@ -87,6 +87,9 @@ describe("loadProfileSignatureVerifierFromEnv", () => {
     ["tolerance fraction", { [TOLERANCE_ENV]: "1.5" }],
     ["tolerance overflow", { [TOLERANCE_ENV]: "9007199254740992" }],
     ["oversized tolerance", { [TOLERANCE_ENV]: "9".repeat(5000) }],
+    ["tolerance above five minutes", { [TOLERANCE_ENV]: "301" }],
+    ["tolerance of one day", { [TOLERANCE_ENV]: "86400" }],
+    ["tolerance with leading zero", { [TOLERANCE_ENV]: "060" }],
     ["blank audience", { [AUDIENCE_ENV]: "  " }],
     ["switch invalid while disabled", { [INSECURE_ENV]: "maybe" }],
   ])("never disables on invalid config: %s", (_name, env) => {
@@ -95,9 +98,16 @@ describe("loadProfileSignatureVerifierFromEnv", () => {
     expect(error.message).not.toContain("user:pass")
   })
 
-  it("accepts the maximum safe integer tolerance", () => {
-    const verifier = load({ ...ENABLED, [TOLERANCE_ENV]: "9007199254740991" })
-    expect(verifier?.toleranceSeconds).toBe(Number.MAX_SAFE_INTEGER)
+  it("accepts canonical tolerances up to five minutes", () => {
+    expect(load({ ...ENABLED, [TOLERANCE_ENV]: "1" })?.toleranceSeconds).toBe(1)
+    expect(load({ ...ENABLED, [TOLERANCE_ENV]: " 120 " })?.toleranceSeconds).toBe(120)
+    expect(load({ ...ENABLED, [TOLERANCE_ENV]: "300" })?.toleranceSeconds).toBe(300)
+  })
+
+  it("names the accepted range when the tolerance is too wide", () => {
+    const error = configurationError({ ...ENABLED, [TOLERANCE_ENV]: "301" })
+
+    expect(error.message).toContain("between 1 and 300")
   })
 
   it("reads process.env by default", () => {

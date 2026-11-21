@@ -2,6 +2,7 @@ import type { IncomingMessage } from "node:http"
 import { ProfileSignatureError } from "./errors.js"
 import type { JwksProfileSignatureVerifier } from "./jwks/jwksProfileSignatureVerifier.js"
 import type { Profile } from "./models/profile.js"
+import { loadProfileSignatureVerifierFromEnv } from "./profileSignatureConfig.js"
 import {
   DEFAULT_PROFILE_KEY,
   DEFAULT_PROFILE_SIGNATURE_KEY,
@@ -145,4 +146,25 @@ export function warnWhenSignatureIsIgnored(message: IncomingMessage): void {
 /** Test-only: allow the one-time warning to be observed again. */
 export function resetSignatureIgnoredWarning(): void {
   unverifiedSignatureWarned = false
+}
+
+let sharedVerifier: JwksProfileSignatureVerifier | undefined
+
+/**
+ * The verifier configured by `process.env`, one per process: every Express
+ * factory call and the Fastify plugin share its key cache, fetches and
+ * cooldowns. The environment is read on each call until verification is
+ * enabled (invalid settings throw, "disabled" is never remembered); from then
+ * on the same verifier is returned.
+ */
+export function sharedProfileSignatureVerifier():
+  | JwksProfileSignatureVerifier
+  | undefined {
+  sharedVerifier ??= loadProfileSignatureVerifierFromEnv()
+  return sharedVerifier
+}
+
+/** Test-only: forget the shared verifier so the environment is read again. */
+export function resetSharedProfileSignatureVerifier(): void {
+  sharedVerifier = undefined
 }

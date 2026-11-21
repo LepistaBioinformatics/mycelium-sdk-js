@@ -128,13 +128,20 @@ registering the plugin:
 ```bash
 export MYCELIUM_JWKS_URL="https://gateway.internal/.well-known/mycelium-profile-jwks.json"
 export MYC_PROFILE_SIGNATURE_AUDIENCE=billing-api   # required: this service's name in the gateway
-export MYC_PROFILE_SIGNATURE_TOLERANCE_SECONDS=60   # optional, default 60
+export MYC_PROFILE_SIGNATURE_TOLERANCE_SECONDS=60   # optional, default 60, at most 300
 # export MYCELIUM_JWKS_ALLOW_INSECURE_HTTP=true     # local development only (http:// URL)
 ```
 
-The environment is read once, when `profileMiddleware()` /
+`MYCELIUM_JWKS_URL` accepts either the complete endpoint (as above) or just
+the gateway address, to which `/.well-known/mycelium-profile-jwks.json` is
+appended: `mycelium.example.com` or `https://mycelium.example.com/prod` (a
+path prefix is kept). `https://` is assumed when no scheme is given. A gateway
+address must not carry a query or fragment.
+
+The environment is read when `profileMiddleware()` /
 `getProfileFromHeaderRequired()` are called or `fastifyProfilePlugin` is
-registered. Invalid configuration (non-`https` URL without the development
+registered. The verifier it configures is created once per process and shared
+by every later call (one key cache, even with a middleware per route). Invalid configuration (non-`https` URL without the development
 switch, URL with credentials, missing audience, invalid tolerance) throws
 `ProfileSignatureConfigurationError` there, so the application does not
 start. Load `.env` files before that point.
@@ -166,8 +173,9 @@ applies). Duplicate headers are rejected. `next()` / the route handler only
 run after the signature is accepted. Unexpected internal failures return generic
 500 without invoking the handler. Without `MYCELIUM_JWKS_URL` nothing changes,
 except that a signed profile logs one `console.warn` per process
-(`MYCELIUM_JWKS_URL` is not set, so nothing is verified). Tolerance must be a
-positive safe integer (<= 9007199254740991).
+(`MYCELIUM_JWKS_URL` is not set, so nothing is verified). Tolerance must be an
+integer between 1 and 300 seconds (it is the replay window of a signature);
+any other value is a configuration error.
 
 Key handling follows the gateway contract (`jwks-vectors.json`):
 
@@ -177,7 +185,11 @@ Key handling follows the gateway contract (`jwks-vectors.json`):
   30 seconds and shared by concurrent requests, so gateway key rotation needs
   no change or restart here;
 - if a refresh fails, the last valid set is kept and the failure is logged
-  (`console.warn`, prefixed `[mycelium-sdk]`);
+  (`console.warn`, prefixed `[mycelium-sdk]`); a set that expired more than
+  1 day ago is no longer trusted, so requests fail closed (403) until a
+  refresh succeeds;
+- requests never wait for a refresh another request already started while
+  keys are cached;
 - the fetch is bounded (5 seconds, 64 KiB, redirects never followed) and a
   set with private material, another key type, a wrong key length or a
   non-canonical/repeated `kid` is refused as a whole.

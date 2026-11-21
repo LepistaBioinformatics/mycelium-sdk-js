@@ -131,11 +131,19 @@ export interface JwksCacheVector {
   expectedSeconds: number
 }
 
+export interface JwksUrlVector {
+  configured: string
+  allowInsecureHttp: boolean
+  /** `null` means the value is a configuration error. */
+  resolved: string | null
+}
+
 export interface JwksContract {
   contract: Record<string, string | number>
   published: string
   vectors: JwksContractVector[]
   cacheControl: JwksCacheVector[]
+  urls: JwksUrlVector[]
 }
 
 export const JWKS_CONTRACT_FILE = join(here, "profile-signature", "jwks-vectors.json")

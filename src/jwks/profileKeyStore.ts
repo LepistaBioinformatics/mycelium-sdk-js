@@ -1,6 +1,9 @@
 import type { KeyObject } from "node:crypto"
 import type { ProfileJwksFetcher } from "./fetchProfileJwks.js"
-import { PROFILE_JWKS_EMPTY_RETRY_SECONDS } from "../settings.js"
+import {
+  PROFILE_JWKS_EMPTY_RETRY_SECONDS,
+  PROFILE_JWKS_MAX_STALE_SECONDS,
+} from "../settings.js"
 
 /** Milliseconds clock, injectable for tests. */
 export type MonotonicClock = () => number
@@ -20,11 +23,15 @@ export interface CachedProfileKeys {
  *   the fetch is retried at most every `PROFILE_JWKS_EMPTY_RETRY_SECONDS`, so
  *   a service started before the gateway recovers within seconds.
  * - Refreshed when `max-age` expires; a failed refresh keeps the last valid
- *   set and logs a warning, so a gateway outage never drops trusted keys.
+ *   set and logs a warning, so a short gateway outage never drops trusted
+ *   keys. The set stops being trusted `PROFILE_JWKS_MAX_STALE_SECONDS` after
+ *   it expired, so a retired key cannot verify forever while refreshes fail.
+ * - A request never waits for a refresh another request already started
+ *   while keys are cached: it verifies with the cached set.
  * - Refetched once when a signature names an unknown `kid`, at most once per
- *   cooldown (measured from the last attempt), and single-flight: concurrent
- *   requests share one fetch, and waiters that see a newer generation reuse
- *   it without fetching again.
+ *   cooldown (measured from the end of the last attempt), and single-flight:
+ *   concurrent requests share one fetch, and waiters that see a newer
+ *   generation reuse it without fetching again.
  */
 export class ProfileKeyStore {
   readonly #url: URL
@@ -55,7 +62,15 @@ export class ProfileKeyStore {
 
   /** The trusted keys now, and the generation they belong to. */
   current(): CachedProfileKeys {
-    return { keys: this.#keys, generation: this.#generation }
+    return { keys: this.#trustedKeys(), generation: this.#generation }
+  }
+
+  /** The cached keys, or none once they outlived the maximum staleness. */
+  #trustedKeys(): ReadonlyMap<string, KeyObject> {
+    const outlived =
+      this.#freshUntil !== undefined &&
+      this.#clock() >= this.#freshUntil + PROFILE_JWKS_MAX_STALE_SECONDS * 1000
+    return outlived ? new Map() : this.#keys
   }
 
   /** Fetch the set now; any failure rejects (startup must abort). */
@@ -77,7 +92,9 @@ export class ProfileKeyStore {
   async refreshIfStale(): Promise<void> {
     const stale =
       this.#freshUntil === undefined || this.#clock() >= this.#freshUntil
-    if (stale) await this.#refreshFrom(this.#generation)
+    if (!stale) return
+    if (this.#generation > 0 && this.#inFlight !== undefined) return
+    await this.#refreshFrom(this.#generation)
   }
 
   /** Refetch after an unknown `kid`; `true` when newer keys are available. */
@@ -117,8 +134,12 @@ export class ProfileKeyStore {
   }
 
   async #fetchAndStore(): Promise<void> {
-    this.#lastAttempt = this.#clock()
-    const fetched = await this.#fetcher(new URL(this.#url))
+    let fetched
+    try {
+      fetched = await this.#fetcher(new URL(this.#url))
+    } finally {
+      this.#lastAttempt = this.#clock()
+    }
 
     this.#keys = new Map(fetched.keys)
     this.#generation += 1

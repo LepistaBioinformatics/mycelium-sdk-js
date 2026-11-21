@@ -22,8 +22,12 @@ export const PROFILE_JWKS_EMPTY_RETRY_SECONDS = 5
 export const PROFILE_JWKS_DEFAULT_MAX_AGE_SECONDS = 43_200
 export const PROFILE_JWKS_MIN_MAX_AGE_SECONDS = 60
 export const PROFILE_JWKS_MAX_MAX_AGE_SECONDS = 86_400
+/** How long an expired key set stays trusted while refreshes fail. */
+export const PROFILE_JWKS_MAX_STALE_SECONDS = 86_400
 export const PROFILE_SIGNATURE_TOLERANCE_ENV =
   "MYC_PROFILE_SIGNATURE_TOLERANCE_SECONDS"
 export const PROFILE_SIGNATURE_AUDIENCE_ENV = "MYC_PROFILE_SIGNATURE_AUDIENCE"
 export const DEFAULT_PROFILE_SIGNATURE_TOLERANCE_SECONDS = 60
+/** Largest accepted tolerance: it is the replay window of a signature. */
+export const MAX_PROFILE_SIGNATURE_TOLERANCE_SECONDS = 300
 export const MAX_PROFILE_SIGNATURE_BYTES = 4096

@@ -2,12 +2,14 @@ import express, { type RequestHandler } from "express"
 import supertest from "supertest"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { ProfileSignatureConfigurationError } from "../errors.js"
+import { resetSharedProfileSignatureVerifier } from "../profileSignatureEnforcement.js"
 import {
   DEFAULT_PROFILE_KEY,
   DEFAULT_PROFILE_SIGNATURE_KEY,
 } from "../settings.js"
 import {
   CONTRACT,
+  JWKS_CONTRACT,
   TEST_AUDIENCE,
   jwksVerifierFor,
   vectorNamed,
@@ -167,12 +169,13 @@ describe("Express factories read the environment at creation", () => {
 
   afterEach(() => {
     for (const variable of variables) delete process.env[variable]
+    resetSharedProfileSignatureVerifier()
     vi.restoreAllMocks()
   })
 
   it.each([
-    [{ MYCELIUM_JWKS_URL: "https://gateway.test/jwks.json" }],
-    [{ MYCELIUM_JWKS_URL: "http://gateway.test/jwks.json", MYC_PROFILE_SIGNATURE_AUDIENCE: TEST_AUDIENCE }],
+    [{ MYCELIUM_JWKS_URL: "https://gateway.test/.well-known/mycelium-profile-jwks.json" }],
+    [{ MYCELIUM_JWKS_URL: "http://gateway.test/.well-known/mycelium-profile-jwks.json", MYC_PROFILE_SIGNATURE_AUDIENCE: TEST_AUDIENCE }],
     [{ MYCELIUM_JWKS_URL: "not a url", MYC_PROFILE_SIGNATURE_AUDIENCE: TEST_AUDIENCE }],
   ])("invalid configuration throws when the middleware is created (%o)", (env) => {
     Object.assign(process.env, env)
@@ -184,7 +187,7 @@ describe("Express factories read the environment at creation", () => {
   })
 
   it("configured environment enables verification", async () => {
-    process.env.MYCELIUM_JWKS_URL = "https://gateway.test/jwks.json"
+    process.env.MYCELIUM_JWKS_URL = "https://gateway.test/.well-known/mycelium-profile-jwks.json"
     process.env.MYC_PROFILE_SIGNATURE_AUDIENCE = TEST_AUDIENCE
     const calls = { count: 0 }
 
@@ -195,6 +198,55 @@ describe("Express factories read the environment at creation", () => {
 
     expect(response.status).toBe(403)
     expect(calls.count).toBe(0)
+  })
+
+  it("every factory call shares one key store per process", async () => {
+    process.env.MYCELIUM_JWKS_URL = "https://gateway.test/.well-known/mycelium-profile-jwks.json"
+    process.env.MYC_PROFILE_SIGNATURE_AUDIENCE = TEST_AUDIENCE
+    vi.spyOn(Date, "now").mockReturnValue(VALID.nowSeconds * 1000)
+    const fetchJwks = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () =>
+        new Response(JWKS_CONTRACT.published, {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })
+    )
+    const calls = { count: 0 }
+    const app = express()
+    for (const [path, handler] of [
+      ["/a", profileMiddleware()],
+      ["/b", profileMiddleware()],
+      ["/c", getProfileFromHeaderRequired()],
+    ] as const) {
+      app.get(path, handler, (_req, res) => {
+        calls.count += 1
+        res.sendStatus(204)
+      })
+    }
+
+    for (const path of ["/a", "/b", "/c"]) {
+      const response = await supertest(app).get(path).set(signed() as Record<string, string>)
+      expect(response.status).toBe(204)
+    }
+
+    expect(calls.count).toBe(3)
+    expect(fetchJwks).toHaveBeenCalledTimes(1)
+  })
+
+  it("an explicit signatureVerifier wins over the shared one", async () => {
+    process.env.MYCELIUM_JWKS_URL = "https://gateway.test/.well-known/mycelium-profile-jwks.json"
+    process.env.MYC_PROFILE_SIGNATURE_AUDIENCE = "another-service"
+    vi.spyOn(Date, "now").mockReturnValue(VALID.nowSeconds * 1000)
+    profileMiddleware()
+    const calls = { count: 0 }
+
+    const response = await send(
+      buildApp(profileMiddleware({ signatureVerifier: verifier() }), calls),
+      signed()
+    )
+
+    expect(response.status).toBe(200)
+    expect(calls.count).toBe(1)
   })
 
   it("without configuration the signature header is ignored", async () => {

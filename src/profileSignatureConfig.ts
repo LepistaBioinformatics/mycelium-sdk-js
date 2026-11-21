@@ -8,6 +8,7 @@ import { parseProfileJwksUrl } from "./jwks/parseProfileJwksUrl.js"
 import { ProfileKeyStore } from "./jwks/profileKeyStore.js"
 import {
   DEFAULT_PROFILE_SIGNATURE_TOLERANCE_SECONDS,
+  MAX_PROFILE_SIGNATURE_TOLERANCE_SECONDS,
   PROFILE_JWKS_ALLOW_INSECURE_HTTP_ENV,
   PROFILE_JWKS_REFETCH_COOLDOWN_SECONDS,
   PROFILE_JWKS_URL_ENV,
@@ -25,9 +26,12 @@ function parseTolerance(env: EnvironmentSource): number {
 
   const trimmed = raw.trim()
   const value = Number(trimmed)
-  if (!CANONICAL_POSITIVE_INTEGER.test(trimmed) || !Number.isSafeInteger(value)) {
+  if (
+    !CANONICAL_POSITIVE_INTEGER.test(trimmed) ||
+    !(value <= MAX_PROFILE_SIGNATURE_TOLERANCE_SECONDS)
+  ) {
     throw new ProfileSignatureConfigurationError(
-      `${PROFILE_SIGNATURE_TOLERANCE_ENV} must be a positive integer`
+      `${PROFILE_SIGNATURE_TOLERANCE_ENV} must be an integer between 1 and ${MAX_PROFILE_SIGNATURE_TOLERANCE_SECONDS}`
     )
   }
 
