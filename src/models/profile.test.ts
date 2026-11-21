@@ -43,6 +43,17 @@ function buildProfile(overrides: Partial<Record<string, unknown>> = {}) {
 }
 
 describe("Profile — schema and skeleton", () => {
+  it.each([undefined, null, "verified"])(
+    "accepts the gateway's optional verboseStatus (%s)",
+    (verboseStatus) => {
+      expect(buildProfile({ verboseStatus }).data.verboseStatus).toBe(verboseStatus)
+    }
+  )
+
+  it.each([42, {}, "not-a-status"])("rejects an invalid verboseStatus (%s)", (verboseStatus) => {
+    expect(() => buildProfile({ verboseStatus })).toThrow()
+  })
+
   it("validates a minimal profile", () => {
     const profile = buildProfile()
     expect(profile.accId).toBe(ACC_1)
