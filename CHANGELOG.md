@@ -1,3 +1,15 @@
+## [2.1.0](https://github.com/LepistaBioinformatics/mycelium-sdk-js/compare/v2.0.0...v2.1.0) (2026-11-21)
+
+### Features
+
+* harden profile signature verification and accept the gateway base URL ([9e0354e](https://github.com/LepistaBioinformatics/mycelium-sdk-js/commit/9e0354e9ccb8c4256900107865b3e2f9d4142df3))
+* verify profile signatures with the gateway JWKS ([b952fb8](https://github.com/LepistaBioinformatics/mycelium-sdk-js/commit/b952fb8300a5fb5080560c9ae4a81471ccc61238)), closes [LepistaBioinformatics/mycelium#224](https://github.com/LepistaBioinformatics/mycelium/issues/224)
+* verify the gateway profile signature ([68da618](https://github.com/LepistaBioinformatics/mycelium-sdk-js/commit/68da61813253dabac2d5fc54fb6d635c97e9de4b)), closes [LepistaBioinformatics/mycelium#224](https://github.com/LepistaBioinformatics/mycelium/issues/224)
+
+### Bug Fixes
+
+* accept the profile wire format emitted by the gateway ([15e5be5](https://github.com/LepistaBioinformatics/mycelium-sdk-js/commit/15e5be50df58e031affed9f957f1c7bc244109b7)), closes [LepistaBioinformatics/mycelium#224](https://github.com/LepistaBioinformatics/mycelium/issues/224)
+
 ## [2.0.0](https://github.com/LepistaBioinformatics/mycelium-sdk-js/compare/v1.0.0...v2.0.0) (2026-07-12)
 
 ### ⚠ BREAKING CHANGES
