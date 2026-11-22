@@ -1,3 +1,13 @@
+## [2.2.0](https://github.com/LepistaBioinformatics/mycelium-sdk-js/compare/v2.1.0...v2.2.0) (2026-11-22)
+
+### Features
+
+* federated grants in the profile ([3b955ef](https://github.com/LepistaBioinformatics/mycelium-sdk-js/commit/3b955ef0432d7543d295412d2f509a18d65cd997))
+
+### Bug Fixes
+
+* federated opt-ins only open a chain ([f0f5414](https://github.com/LepistaBioinformatics/mycelium-sdk-js/commit/f0f54140b4583283f72106c73b810403feb5cd4d))
+
 ## Unreleased
 
 ### Features
