@@ -4,6 +4,11 @@ import {
   InsufficientPrivilegesError,
 } from "../errors.js"
 import { ProfileMetaSchema } from "./accountMetaKey.js"
+import {
+  FederatedResourcesSchema,
+  toGrant,
+  type FederatedResources,
+} from "./federatedResource.js"
 import type { LicensedResource } from "./licensedResource.js"
 import {
   LicensedResourcesSchema,
@@ -32,6 +37,7 @@ export const ProfileSchema = z.object({
   accountWasDeleted: z.boolean(),
   verboseStatus: VerboseStatusSchema.nullish(),
   licensedResources: LicensedResourcesSchema.optional(),
+  federatedResources: FederatedResourcesSchema.optional(),
   tenantsOwnership: TenantsOwnershipSchema.optional(),
   meta: ProfileMetaSchema.optional(),
   filteringState: z.array(z.string()).optional(),
@@ -78,6 +84,10 @@ export class Profile {
     return this.data.licensedResources
   }
 
+  get federatedResources(): FederatedResources | undefined {
+    return this.data.federatedResources
+  }
+
   get tenantsOwnership() {
     return this.data.tenantsOwnership
   }
@@ -99,6 +109,58 @@ export class Profile {
     return records.length === 0
       ? undefined
       : { kind: "records", records }
+  }
+
+  /**
+   * Add every federated grant (whatever its issuer) to the local licensed
+   * resources. Every other filter works on local grants only unless this, or
+   * `fromIssuer`, is called first.
+   *
+   * Must be the first call of a chain: called after any other filter it
+   * yields no licensed resources, so it never widens a narrowed chain.
+   */
+  withFederated(): Profile {
+    const records = this.isChainOpen()
+      ? [
+          ...toLicensesVector(this.data.licensedResources),
+          ...(this.data.federatedResources ?? []).map(toGrant),
+        ]
+      : []
+    return this.withData({
+      licensedResources:
+        records.length === 0 ? undefined : { kind: "records", records },
+      filteringState: appendState(
+        this.data.filteringState,
+        `withFederated:true`
+      ),
+    })
+  }
+
+  /**
+   * Keep only the federated grants asserted by one issuer (a peer instance
+   * id), dropping the local licensed resources.
+   *
+   * Must be the first call of a chain: called after any other filter it
+   * yields no licensed resources, so it never widens a narrowed chain.
+   */
+  fromIssuer(issuerId: string): Profile {
+    const records = this.isChainOpen()
+      ? (this.data.federatedResources ?? [])
+          .filter((r) => r.issuer === issuerId)
+          .map(toGrant)
+      : []
+    return this.withData({
+      licensedResources:
+        records.length === 0 ? undefined : { kind: "records", records },
+      filteringState: appendState(
+        this.data.filteringState,
+        `issuer:${issuerId}`
+      ),
+    })
+  }
+
+  private isChainOpen(): boolean {
+    return (this.data.filteringState ?? []).length === 0
   }
 
   private withPermission(permission: Permission): Profile {
