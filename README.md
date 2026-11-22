@@ -61,6 +61,22 @@ if (!result.success) {
 }
 ```
 
+### Federated grants
+
+When the gateway federates with peer instances, the profile may carry an optional
+`federatedResources` array: grants the subject holds on a peer, each a licensed
+resource plus the `issuer` (the peer instance id). Every filter above works on the
+local `licensedResources` only; opt in explicitly:
+
+- `withFederated()` — adds every federated grant (any issuer) to the local ones.
+- `fromIssuer(issuerId)` — keeps only the grants asserted by that issuer, dropping
+  the local ones.
+
+```ts
+profile.withFederated().withRoles(["admin"]).getRelatedAccountOrError()
+profile.fromIssuer(peerInstanceId).withRoles(["admin"]).getIdsOrError()
+```
+
 ## Express usage
 
 ```ts

@@ -1,3 +1,10 @@
+## Unreleased
+
+### Features
+
+* federated grants in the profile: optional `federatedResources` (`FederatedResource` = licensed resource + `issuer`), ignored by every existing filter; opt in with `withFederated()` or `fromIssuer(issuerId)`
+* contract vectors synced with the gateway (adds `valid_with_federated_resources`)
+
 ## [2.1.0](https://github.com/LepistaBioinformatics/mycelium-sdk-js/compare/v2.0.0...v2.1.0) (2026-11-21)
 
 ### Features
