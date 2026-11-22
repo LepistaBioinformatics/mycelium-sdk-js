@@ -72,6 +72,9 @@ local `licensedResources` only; opt in explicitly:
 - `fromIssuer(issuerId)` — keeps only the grants asserted by that issuer, dropping
   the local ones.
 
+Both must come first in a chain: called after any other filter they yield no
+licensed resources, so they can never widen an already narrowed chain.
+
 ```ts
 profile.withFederated().withRoles(["admin"]).getRelatedAccountOrError()
 profile.fromIssuer(peerInstanceId).withRoles(["admin"]).getIdsOrError()

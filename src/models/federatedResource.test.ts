@@ -121,6 +121,37 @@ describe("Profile federated grants", () => {
   })
 })
 
+describe("federated opt-ins only open a chain", () => {
+  it("withFederated after another filter yields no licensed resources", () => {
+    const profile = buildProfile().onTenant(LOCAL_TENANT).withFederated()
+    expect(profile.licensedResources).toBeUndefined()
+    expect(profile.filteringState).toEqual([
+      `1:tenantId:${LOCAL_TENANT}`,
+      "2:withFederated:true",
+    ])
+  })
+
+  it("fromIssuer after another filter yields no licensed resources", () => {
+    const profile = buildProfile().withRoles(["peer-role"]).fromIssuer(ISSUER_1)
+    expect(profile.licensedResources).toBeUndefined()
+    expect(profile.filteringState).toEqual([
+      "1:role:peer-role",
+      `2:issuer:${ISSUER_1}`,
+    ])
+  })
+
+  it("filters after withFederated keep the federated grant", () => {
+    const profile = buildProfile({
+      federatedResources: [
+        grant({ issuer: ISSUER_1, tenantId: PEER_TENANT, role: "peer-role" }),
+      ],
+    })
+      .withFederated()
+      .onTenant(PEER_TENANT)
+    expect(roles(profile)).toEqual(["peer-role"])
+  })
+})
+
 describe("gateway vector valid_with_federated_resources", () => {
   const ISSUER = "77777777-7777-4777-8777-777777777777"
   const profile = decodeAndDecompressProfileFromBase64(

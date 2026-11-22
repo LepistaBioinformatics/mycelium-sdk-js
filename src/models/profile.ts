@@ -115,12 +115,17 @@ export class Profile {
    * Add every federated grant (whatever its issuer) to the local licensed
    * resources. Every other filter works on local grants only unless this, or
    * `fromIssuer`, is called first.
+   *
+   * Must be the first call of a chain: called after any other filter it
+   * yields no licensed resources, so it never widens a narrowed chain.
    */
   withFederated(): Profile {
-    const records = [
-      ...toLicensesVector(this.data.licensedResources),
-      ...(this.data.federatedResources ?? []).map(toGrant),
-    ]
+    const records = this.isChainOpen()
+      ? [
+          ...toLicensesVector(this.data.licensedResources),
+          ...(this.data.federatedResources ?? []).map(toGrant),
+        ]
+      : []
     return this.withData({
       licensedResources:
         records.length === 0 ? undefined : { kind: "records", records },
@@ -134,11 +139,16 @@ export class Profile {
   /**
    * Keep only the federated grants asserted by one issuer (a peer instance
    * id), dropping the local licensed resources.
+   *
+   * Must be the first call of a chain: called after any other filter it
+   * yields no licensed resources, so it never widens a narrowed chain.
    */
   fromIssuer(issuerId: string): Profile {
-    const records = (this.data.federatedResources ?? [])
-      .filter((r) => r.issuer === issuerId)
-      .map(toGrant)
+    const records = this.isChainOpen()
+      ? (this.data.federatedResources ?? [])
+          .filter((r) => r.issuer === issuerId)
+          .map(toGrant)
+      : []
     return this.withData({
       licensedResources:
         records.length === 0 ? undefined : { kind: "records", records },
@@ -147,6 +157,10 @@ export class Profile {
         `issuer:${issuerId}`
       ),
     })
+  }
+
+  private isChainOpen(): boolean {
+    return (this.data.filteringState ?? []).length === 0
   }
 
   private withPermission(permission: Permission): Profile {
